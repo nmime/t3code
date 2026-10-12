@@ -55,15 +55,16 @@ shared by both halves through the package's `./settings` export.
 The adapter itself implements the same operation set as `ProviderAdapterV2` in
 `packages/provider-core/src/server/ProviderAdapter.ts`:
 
-| T3 operation                    | Remote implementation                                                                     |
-| ------------------------------- | ----------------------------------------------------------------------------------------- |
-| `openSession`                   | `session.open` command to the task worker                                                 |
-| `ensureThread` / `resumeThread` | `thread.ensure` / `thread.resume`                                                         |
-| `startTurn`                     | `turn.start` (idempotent by `effectId`)                                                   |
-| `interrupt` / `steerRun`        | `turn.interrupt` / `turn.steer`, gated on capability flags                                |
-| `respondRuntimeRequest`         | `runtime_request.respond`                                                                 |
-| `rollbackThread` / `forkThread` | `thread.rollback` / `thread.fork`, gated on capability flags                              |
-| `events` stream                 | Worker events persisted by `WorkerConnectionRegistry`, replayed from the store, then live |
+| T3 operation                    | Remote implementation                                                                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `openSession`                   | `session.open` command to the task worker                                                                              |
+| `ensureThread` / `resumeThread` | `thread.ensure` / `thread.resume`                                                                                      |
+| `startTurn`                     | `turn.start` (idempotent by `effectId`)                                                                                |
+| `interrupt` / `steerRun`        | `turn.interrupt` / `turn.steer`, gated on capability flags                                                             |
+| `respondRuntimeRequest`         | `runtime_request.respond`                                                                                              |
+| `rollbackThread` / `forkThread` | `thread.rollback` / `thread.fork`, gated on capability flags; a fork is `POST /tasks/:id/fork` in the source's project |
+| `textGeneration.*`              | `POST /text-generation`, which resolves `cwd` to the task that owns it and runs the prompt there one-shot              |
+| `events` stream                 | Worker events persisted by `WorkerConnectionRegistry`, replayed from the store, then live                              |
 
 `capabilities()` comes from the worker's advertised inventory, so
 `ProviderAdapterCapabilitiesError`-style mistakes (claiming steering for a CLI
@@ -169,6 +170,28 @@ fork only has to pass it through. What changes in the fork:
 Two rules the fork must not break, because the control plane cannot enforce them
 for a client that bypasses the API: never run a provider against the shared base
 checkout, and never treat a worktree as a credential boundary.
+
+## 7b. What the fork enforces, and what it delegates
+
+Three things the report flagged as reductions in guarantee are now the control
+plane's, not the client's:
+
+- **Runtime modes.** A profile names `agents.maxRuntimeMode`, and a turn asking
+  for more than that is refused before a sandbox is touched. The mode a turn runs
+  under is recorded with the turn and handed to the sandbox. With the default cap
+  (`full-access`) nothing is restricted, and the adapter still reports
+  `runtimePolicy.enforcement: "client-boundary"` rather than overclaiming.
+- **Forking.** `POST /tasks/:id/fork` creates the fork in the source's project —
+  same sandbox, its own worktree off the source's branch head — and the worker
+  forks the native thread. A dedicated sandbox cannot be forked and says so.
+- **Text generation.** `POST /text-generation` runs T3's own prompt in the task
+  that owns the `cwd` and returns the reply for T3 to decode. It is not a turn:
+  nothing is written to the task's event log.
+
+What is still delegated: the agent's own flags. How a runtime mode maps onto
+`codex --sandbox` or `claude --permission-mode` is the profile's business; the
+control plane caps and records the mode, it does not rewrite the agent's
+command line.
 
 ## 8. Order of work (report §11)
 

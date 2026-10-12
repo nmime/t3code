@@ -117,24 +117,68 @@ The instance's status line in Settings is the **control plane's** health, as the
 driver probes it: reachable, token accepted, and the named environment profile
 present. A failure says which of the three it was.
 
-## What is not supported (yet)
+## What is not supported
 
-- **Forking** a thread. `canForkThread` is false and `forkThread` fails with
-  `ProviderAdapterForkThreadError`. The control plane has the pieces (a task can
-  be created in the same project, and the worker can fork a native thread), but
-  the cross-task thread plumbing is not wired.
 - **Tool items, plans and subagents.** The control plane's normalized protocol
   carries messages, turns and runtime requests; T3's tool/plan/subagent events
   are reported as unsupported rather than faked.
-- **Application text generation.** Commit messages, PR bodies, branch names,
-  thread titles and review guides are not generated: they would have to come
-  from a model inside the sandbox, and this integration does not run one for
-  that. T3 is told the operation is unsupported, so it falls back rather than
-  waiting on a model that will never answer.
-- **Native runtime-mode enforcement.** The sandbox profile carries the
-  environment, but T3's runtime modes are enforced at the client boundary
-  (`runtimePolicy.enforcement: "client-boundary"`), which the report calls out
-  as a real reduction in guarantee.
+- **Review guides.** `generateReviewGuide` is refused with
+  `investigationUnsupported`: it is the one text-generation operation that needs
+  read-only tools over several turns, and the sandbox's one-shot invocation has
+  no read-only mode to promise. Every other operation generates (below), so T3
+  falls back for this one operation only.
+- **Forking a dedicated sandbox.** A thread whose sandbox is its own has no
+  project to fork into — its conversation lives in a worker no other task can
+  reach — so `forkThread` refuses it with `capability_unsupported`. Threads in a
+  shared project sandbox fork normally.
+
+## Forking
+
+`forkThread` creates a task in the source's project, so the fork shares the
+sandbox and gets its own worktree based on the source's branch head: committed
+work comes along, uncommitted work does not, because a worktree belongs to one
+task and two agents must not write the same files. The conversation comes along
+as a native thread fork, and the worker reports what it inherited (`forkedFrom`,
+`messageCount`) on the fork's `thread.updated`.
+
+The control plane does **not** replay the source's messages into the fork's
+event log: T3 carries its own copy of the conversation into the new thread, and
+replaying them would append every message a second time.
+
+## Text generation
+
+Commit messages, change-request content, branch names and thread titles run in
+the sandbox: the prompt T3 builds is handed to the agent there, one-shot, and its
+reply is decoded against the operation's own schema. The adapter implements T3's
+`ProviderTextGeneration` through `fromRunner` over the control plane's
+`POST /text-generation`, so T3's prompts and reply parsing are used unchanged.
+
+The endpoint resolves the caller's `cwd` to the task that owns it — its worktree,
+or the shared base checkout, where the task worked in most recently — and a
+workspace no task owns is refused with `task_not_found` rather than guessed at.
+Generation is not a turn: nothing is written to the task's event log, so a
+generated commit message never appears in the thread that asked for it.
+
+## Runtime modes
+
+A profile names the strongest T3 runtime mode it permits:
+
+```yaml
+agents:
+  allowed: [codex]
+  maxRuntimeMode: auto-accept-edits # approval-required < auto-accept-edits < auto < full-access
+```
+
+The control plane enforces it: a turn stronger than the pinned profile's cap is
+refused with `capability_unsupported` before anything reaches a sandbox, and the
+mode a turn runs under is recorded with the turn and passed to the sandbox. A
+project or task layer may tighten the cap, never loosen it.
+
+The snapshot carries `runtimeModeCap`, and the adapter reports
+`runtimePolicy.enforcement: "native"` only when the cap restricts something. With
+the default cap of `full-access` nothing is restricted and it still reports
+`client-boundary` rather than overclaiming; how the agent's own flags map to a
+mode is the profile's business, not this adapter's.
 
 ## Tests
 
@@ -146,8 +190,24 @@ pnpm --filter @t3tools/provider-daytona test
 plane from `@t3tools/daytona` — real sandbox directories, a real worker, real
 turns — because both halves live in this repository. It covers thread→task
 creation, turns, the snapshot a client resumes from, the event stream, an
-approval round trip, checkpoint rollback, typed refusals and the shared-sandbox
-worktree model.
+approval round trip, checkpoint rollback, forking, text generation, the
+runtime-mode cap, typed refusals and the shared-sandbox worktree model.
+
+### What the tests do not prove
+
+Everything here stops at the **control-plane boundary**: the adapter, the client,
+the control plane and the worker are all real, but the events T3's own
+`ProviderEventIngestor` and `RunExecutionService` produce from them are not
+exercised. `apps/server`'s replay harness
+(`apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts`) can drive a
+live adapter through the real orchestrator — `layerWithRegistry` takes any
+`ProviderAdapterRegistryV2` layer — and a test doing that for this adapter was
+written and run: the scenario dispatches `thread.create` and `message.dispatch`,
+T3 opens the session, and the run fails inside T3's own provider-session-activity
+write (`ProviderSessionActivityError` → `EventSinkWriteError` →
+`PersistenceDecodeError` in `appendAgentEvents`), before the adapter is asked for
+a turn. Until that is understood, treat "T3's projections show a sandbox turn" as
+unproven.
 
 ## Typechecking
 
