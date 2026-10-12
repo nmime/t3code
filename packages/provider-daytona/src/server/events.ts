@@ -60,7 +60,11 @@ export class ProviderEventMapper {
     { messageId: string; text: string; startedAt: number }
   >();
 
-  constructor(private readonly context: MapperContext) {}
+  private readonly context: MapperContext;
+
+  constructor(context: MapperContext) {
+    this.context = context;
+  }
 
   /** Seed from a snapshot so a resumed session starts with the real thread. */
   seed(snapshot: DaytonaSnapshot): void {

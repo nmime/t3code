@@ -9,10 +9,6 @@
     "./server": {
       "types": "./src/server.ts",
       "import": "./src/server.ts"
-    },
-    "./settings": {
-      "types": "./src/settings.ts",
-      "import": "./src/settings.ts"
     }
   },
   "scripts": {

@@ -83,3 +83,36 @@ turns — because both halves live in this repository. It covers thread→task
 creation, turns, the snapshot a client resumes from, the event stream, an
 approval round trip, checkpoint rollback, typed refusals and the shared-sandbox
 worktree model.
+
+## Typechecking
+
+```bash
+pnpm --filter @t3tools/provider-daytona typecheck   # tsc -p tsconfig.json --noEmit
+```
+
+This package's `exports` point at its TypeScript sources, so the moment
+`apps/server` imports `@t3tools/provider-daytona/server` its sources join the
+**app's** program and are checked with the app's options. Two consequences worth
+knowing:
+
+- `apps/server/tsconfig.json` extends `tsconfig.base.json`, which enables
+  `erasableSyntaxOnly`. This package's own tsconfig therefore enables it too: a
+  constructor parameter property compiles under plain `tsc` here but is a hard
+  `TS1294` error in the app. That is exactly how one slipped in once.
+- The app's compiler is `tsc-rs` (the Effect language service), whose *style*
+  diagnostics (`globalDate`, `globalTimers`, `nodeBuiltinImport`, …) are
+  reported only for files that are roots of the program. This package's files
+  are dependencies of `apps/server`, never roots, so its plain-Node idioms are
+  not flagged — the same is true of the app's own code. The package is
+  deliberately plain Node (a control-plane client, not an Effect service), so it
+  typechecks with `tsc`, not `tsc-rs`.
+
+Verification actually performed:
+
+| check | result |
+| --- | --- |
+| `tsc -p packages/provider-daytona/tsconfig.json` | clean |
+| `tsc -p packages/daytona/tsconfig.json --noEmit` | clean (57/57 control-plane tests) |
+| `tsc-rs --noEmit` over the registration path (`builtInProviderAdapterDrivers.ts`) with the app's options | clean, 1.2 GB peak RSS |
+| `tsc-rs --noEmit` over `apps/server/src` (tests/scripts excluded) with the app's options | **0 errors**, 3.3 GB peak RSS |
+| `tsc-rs --noEmit -p apps/server/tsconfig.json` (the app's own script) | **not runnable here**: peak RSS 3.9 GB against a hard 4 GB cgroup with swap disabled, OOM-killed before it can report. Needs a machine with more memory. |
