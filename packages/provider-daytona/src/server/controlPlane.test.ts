@@ -251,3 +251,136 @@ test("the sandbox is a real git worktree when the task is project-scoped", async
   assert.notEqual(statusA.worktreePath, statusB.worktreePath, "one worktree per task");
   assert.equal(statusA.task.sandboxScope, "project");
 });
+
+test("a fork carries the conversation into a new task in the same sandbox", async () => {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "t3x-fork-origin-"));
+  const run = (command: string) =>
+    spawnSync("bash", ["-c", command], { cwd: origin, encoding: "utf8" });
+  run("git init -q -b main");
+  run("git config user.email a@b.c");
+  run("git config user.name t");
+  fs.writeFileSync(path.join(origin, "README.md"), "# fork\n");
+  run("git add -A && git commit -qm init");
+
+  const source = await client.createTask({
+    profileId: "provider-test",
+    provider: "echo",
+    repositoryUrl: origin,
+  });
+  await server.effectWorker.drain();
+  await waitFor(() => server.registry.isConnected(source.taskId), 30_000, "worker attach");
+  await waitFor(() => server.tasks.getTask(source.taskId).state === "ready", 15_000, "ready");
+
+  await client.sendMessage(source.taskId, "remember the number 41");
+  await server.effectWorker.drain();
+  await waitFor(() => server.tasks.getTask(source.taskId).state === "ready", 15_000, "turn end");
+  const before = await client.snapshot(source.taskId);
+  assert.ok(before.messages.length >= 2, "the source has a conversation to fork");
+
+  // The client names the fork's thread, so it can find it again by thread.
+  const forked = await client.forkTask(source.taskId, "thread_fork_target");
+  assert.equal(forked.threadId, "thread_fork_target");
+  assert.equal(forked.projectId, source.projectId, "the fork joins the source's project");
+  assert.equal(forked.sandboxScope, "project");
+  assert.equal((await client.findTaskByThread("thread_fork_target"))?.taskId, forked.taskId);
+
+  await server.effectWorker.drain();
+  await waitFor(() => server.registry.isConnected(forked.taskId), 30_000, "fork worker attach");
+  await waitFor(() => server.tasks.getTask(forked.taskId).state === "ready", 15_000, "fork ready");
+
+  const sourceStatus = await client.status(source.taskId);
+  const forkedStatus = await client.status(forked.taskId);
+  assert.equal(forkedStatus.task.sandboxId, sourceStatus.task.sandboxId, "the same sandbox");
+  assert.notEqual(forkedStatus.worktreePath, sourceStatus.worktreePath, "and its own worktree");
+
+  // The conversation the fork inherited lives in the *agent's* native thread:
+  // the control plane's log for the new task starts at the fork, because
+  // replaying the source's messages into it would append them a second time to
+  // the client's copy. What the worker reports is therefore the proof.
+  const forkedThread = server.tasks
+    .events(forked.taskId, 0)
+    .map((event) => event.payload.providerThread as Record<string, unknown> | undefined)
+    .find((thread) => typeof thread?.forkedFrom === "string");
+  assert.ok(forkedThread, "the worker reports the fork");
+  assert.equal(
+    forkedThread.forkedFrom,
+    before.providerThreadId,
+    "forked from the source's native thread",
+  );
+  assert.equal(
+    forkedThread.messageCount,
+    before.messages.length,
+    "and carries the source's messages",
+  );
+
+  const after = await client.snapshot(forked.taskId);
+  assert.notEqual(
+    after.providerThreadId,
+    before.providerThreadId,
+    "the fork is its own native thread",
+  );
+
+  await client.sendMessage(forked.taskId, "what number?");
+  await server.effectWorker.drain();
+  await waitFor(
+    () => server.tasks.getTask(forked.taskId).state === "ready",
+    15_000,
+    "fork turn end",
+  );
+  const continued = await client.snapshot(forked.taskId);
+  assert.ok(
+    continued.messages.length > after.messages.length,
+    "the fork's own turn appends to the inherited history",
+  );
+  assert.equal(
+    (await client.snapshot(source.taskId)).messages.length,
+    before.messages.length,
+    "and the source is left alone",
+  );
+});
+
+test("a dedicated sandbox cannot be forked, and the refusal says why", async () => {
+  const dedicated = await client.createTask({
+    profileId: "provider-test",
+    provider: "echo",
+    repositoryUrl: "",
+    scope: "task",
+  });
+  await server.effectWorker.drain();
+  await waitFor(() => server.registry.isConnected(dedicated.taskId), 30_000, "worker attach");
+
+  await assert.rejects(
+    () => client.forkTask(dedicated.taskId, "thread_fork_refused"),
+    (error: Error) => {
+      assert.ok(error instanceof DaytonaControlPlaneError);
+      assert.equal(error.code, "capability_unsupported");
+      assert.match(error.message, /sandbox of its own/);
+      return true;
+    },
+  );
+});
+
+test("a thread that already has a task is refused, not duplicated", async () => {
+  const first = await client.createTask({
+    profileId: "provider-test",
+    provider: "echo",
+    repositoryUrl: "",
+    threadId: "thread_claimed",
+  });
+  assert.equal(first.threadId, "thread_claimed");
+
+  await assert.rejects(
+    () =>
+      client.createTask({
+        profileId: "provider-test",
+        provider: "echo",
+        repositoryUrl: "",
+        threadId: "thread_claimed",
+      }),
+    (error: Error) => {
+      assert.ok(error instanceof DaytonaControlPlaneError);
+      assert.equal(error.code, "idempotency_conflict");
+      return true;
+    },
+  );
+});

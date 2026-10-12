@@ -223,6 +223,22 @@ export class DaytonaControlPlane {
     return task;
   }
 
+  /**
+   * Fork a task's provider thread into a new task in the same project, under
+   * `threadId` — the caller's own id for the fork, so the fork can be found
+   * again by thread. The conversation comes along; the new task's worktree is
+   * based on the source's branch head.
+   */
+  async forkTask(sourceTaskId: string, threadId: string): Promise<DaytonaTask> {
+    const { task } = await this.request<{ task: DaytonaTask }>(
+      "POST",
+      `/tasks/${encodeURIComponent(sourceTaskId)}/fork`,
+      { threadId },
+      { timeoutMs: 300_000 },
+    );
+    return task;
+  }
+
   async status(taskId: string): Promise<DaytonaTaskStatus> {
     return await this.request<DaytonaTaskStatus>("GET", `/tasks/${encodeURIComponent(taskId)}`);
   }

@@ -47,6 +47,15 @@ export class TaskService {
     return this.controlPlane.createTask(input);
   }
 
+  /**
+   * Fork a task's provider thread into a new task in the same project. The new
+   * task's thread identity is the caller's, so a client can find it again by
+   * thread.
+   */
+  forkTask(input: { sourceTaskId: string; threadId: string }): TaskRecord {
+    return this.controlPlane.forkTask(input);
+  }
+
   getTask(taskId: string): TaskRecord {
     const task = this.store.getTask(taskId);
     if (!task) throw new TaskNotFoundError(taskId);

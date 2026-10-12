@@ -401,15 +401,37 @@ export const makeAdapter = (
           }),
 
         forkThread: (forkInput) =>
-          Effect.fail(
-            new ProviderAdapter.ProviderAdapterForkThreadError({
-              driver: DAYTONA_DRIVER_KIND,
-              providerThreadId: forkInput.sourceProviderThread.id,
-              cause: new Error(
-                "this provider instance does not support forking; check the reported capabilities first",
-              ),
-            }),
-          ),
+          Effect.tryPromise({
+            try: async () => {
+              // The worker decides: an agent whose runtime has no native fork
+              // reports the capability as false, and asking anyway would be a
+              // lie to the client that reads capabilities.
+              if (!capabilities.threads.canForkThread) {
+                throw new Error(`the sandbox worker does not support forking ${agent} threads`);
+              }
+              const source = tasks.get(appThreadId);
+              if (!source) throw new Error("no sandbox is bound to this session");
+              const targetThreadId = forkInput.targetThreadId as unknown as string;
+              const forked = await client.forkTask(source.taskId, targetThreadId);
+              tasks.set(targetThreadId, forked);
+              await waitForReady(client, forked.taskId, config.readyTimeoutMs ?? 300_000);
+              await refreshCapabilities(forked.taskId);
+              const snapshot = await snapshotOf(forked.taskId);
+              return threadFromSnapshot(
+                mapperContext(mapper, cwd, capabilities, options, {
+                  providerSessionId: input.providerSessionId,
+                  threadId: forkInput.targetThreadId,
+                }),
+                snapshot,
+              );
+            },
+            catch: (cause) =>
+              new ProviderAdapter.ProviderAdapterForkThreadError({
+                driver: DAYTONA_DRIVER_KIND,
+                providerThreadId: forkInput.sourceProviderThread.id,
+                cause: defectOf(cause),
+              }),
+          }),
       };
 
       yield* Effect.addFinalizer(() =>

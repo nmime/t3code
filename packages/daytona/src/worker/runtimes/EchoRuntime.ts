@@ -352,23 +352,34 @@ export class EchoRuntime implements WorkerProviderRuntime {
   }
 
   async forkThread(payload: ThreadForkPayload): Promise<void> {
-    const thread = this.state.threads[payload.threadId];
-    if (!thread) return;
+    // `providerThreadId` is the source — the conversation being copied — and
+    // `threadId` is the target, so the control plane can create a task for the
+    // fork and have that task adopt the history. The fork takes the target's
+    // own native id (one per thread, as `ensureThread` establishes) and reports
+    // where it came from.
+    const source = Object.values(this.state.threads).find(
+      (candidate) => candidate.providerThreadId === payload.providerThreadId,
+    );
+    if (!source) return;
     const forked: EchoThread = {
-      ...thread,
-      providerThreadId: `${thread.providerThreadId}_fork`,
-      messages: [...thread.messages],
+      providerThreadId: `echo_${payload.threadId}`,
+      title: source.title,
+      messages: [...source.messages],
       pendingRequest: null,
       runningTurn: null,
+      turnCounter: source.turnCounter,
     };
-    this.state.threads[`${payload.threadId}_fork`] = forked;
+    this.state.threads[payload.threadId] = forked;
     this.persist();
     this.emit({
       type: "thread.updated",
       driver: this.driver,
       providerThread: {
         providerThreadId: forked.providerThreadId,
-        forkedFrom: thread.providerThreadId,
+        threadId: payload.threadId,
+        forkedFrom: source.providerThreadId,
+        title: forked.title,
+        messageCount: forked.messages.length,
       },
     });
   }

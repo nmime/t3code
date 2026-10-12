@@ -237,6 +237,15 @@ export class EffectWorker {
         return { ok: true };
       }
 
+      case "provider.thread.fork": {
+        const adapter = this.adapter(taskId);
+        await adapter.forkThread({
+          threadId: String(payload.threadId),
+          providerThreadId: String(payload.providerThreadId),
+        });
+        return { ok: true };
+      }
+
       default:
         throw new Error(`unknown effect kind ${effect.kind}`);
     }

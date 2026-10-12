@@ -9,7 +9,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { errorPayload } from "../contracts/errors.js";
+import { errorPayload, ExecutionError } from "../contracts/errors.js";
 import type { SandboxScope } from "../contracts/sandboxScope.js";
 import type { TaskService } from "./TaskService.js";
 import type { EnvironmentProfileService } from "./EnvironmentProfileService.js";
@@ -150,6 +150,20 @@ export class HttpApi {
             ...(body.model ? { model: String(body.model) } : {}),
           });
           return send(res, 202, result);
+        }
+
+        if (rest === "/fork" && method === "POST") {
+          const threadId = String(body.threadId ?? "").trim();
+          if (!threadId) {
+            throw new ExecutionError(
+              "protocol_violation",
+              "POST /tasks/:id/fork needs the new thread's id in `threadId`",
+              { taskId },
+            );
+          }
+          return send(res, 201, {
+            task: this.deps.tasks.forkTask({ sourceTaskId: taskId, threadId }),
+          });
         }
 
         const approvalMatch = rest.match(/^\/approvals\/([^/]+)$/);

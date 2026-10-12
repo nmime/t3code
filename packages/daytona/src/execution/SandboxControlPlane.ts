@@ -73,6 +73,15 @@ export interface CreateTaskInput {
   /** Existing project to attach to; otherwise derived from the repository. */
   projectId?: string;
   projectName?: string;
+  /**
+   * The client's own thread identity for this task.
+   *
+   * T3 passes its app thread id, so that a restarted client can find the task
+   * again by thread instead of provisioning a second sandbox for a
+   * conversation that already has one. Omitted means the control plane mints
+   * an id; a thread that already has a task is refused rather than duplicated.
+   */
+  threadId?: string;
 }
 
 export interface WorkerLauncher {
@@ -205,7 +214,17 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     }
 
     const taskId = newTaskId();
-    const threadId = newThreadId();
+    const threadId = input.threadId ?? newThreadId();
+    if (
+      input.threadId !== undefined &&
+      this.store.listTasks().some((candidate) => candidate.threadId === input.threadId)
+    ) {
+      throw new ExecutionError(
+        "idempotency_conflict",
+        `A task already exists for thread ${input.threadId}`,
+        { threadId: input.threadId },
+      );
+    }
     const now = Date.now();
     const record: TaskRecord = {
       taskId,
@@ -279,6 +298,104 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       ],
     });
     return record;
+  }
+
+  /**
+   * Fork a task's provider thread into a new task in the same project.
+   *
+   * The fork carries the *conversation*: the new task's worktree is based on
+   * the source's branch head, so committed work comes with it, and the agent
+   * starts from the source thread's messages. Uncommitted work does not travel
+   * — a worktree belongs to one task, and two agents must not write the same
+   * files — which a client should say out loud rather than imply otherwise.
+   *
+   * The source has to be project-scoped: a dedicated sandbox keeps its
+   * conversation inside a worker no other task can reach, so there is nothing
+   * to fork from.
+   */
+  forkTask(input: { sourceTaskId: string; threadId: string }): TaskRecord {
+    const source = this.store.requireTask(input.sourceTaskId);
+    if (source.sandboxScope !== "project" || !source.projectId) {
+      throw new ExecutionError(
+        "capability_unsupported",
+        `Task ${source.taskId} runs in a sandbox of its own; its provider thread cannot be forked. Run the source task in the project's shared sandbox first.`,
+        { taskId: source.taskId, sandboxScope: source.sandboxScope },
+      );
+    }
+
+    const forked = this.createTask({
+      profileId: source.profileId,
+      repositoryUrl: source.repositoryUrl,
+      branch: source.worktreeBranch || source.branch,
+      provider: source.provider,
+      providerInstanceId: source.providerInstanceId,
+      model: source.model,
+      permissionMode: source.permissionMode,
+      scope: "project",
+      projectId: source.projectId,
+      threadId: input.threadId,
+    });
+
+    // A source thread that never ran a turn has no native conversation yet;
+    // the new task then simply starts empty, which is what ensuring a thread
+    // would have produced anyway.
+    const sourceProviderThreadId = this.providerThreadIdOf(source.taskId);
+    const effects: Array<Record<string, unknown>> = [
+      {
+        effectId: newEffectId(),
+        kind: "task.ensure_ready",
+        payload: { taskId: forked.taskId },
+        leaseEpoch: forked.leaseEpoch,
+      },
+    ];
+    if (sourceProviderThreadId) {
+      effects.push({
+        effectId: newEffectId(),
+        kind: "provider.thread.fork",
+        payload: {
+          taskId: forked.taskId,
+          threadId: forked.threadId,
+          providerThreadId: sourceProviderThreadId,
+        },
+        leaseEpoch: forked.leaseEpoch,
+      });
+    }
+
+    this.store.submitCommand({
+      commandId: `fork_${forked.taskId}`,
+      taskId: forked.taskId,
+      kind: "task.fork",
+      payload: { sourceTaskId: source.taskId },
+      events: [
+        {
+          type: "task.forked",
+          payload: {
+            taskId: forked.taskId,
+            threadId: forked.threadId,
+            forkedFromTaskId: source.taskId,
+            forkedFromThreadId: sourceProviderThreadId,
+            baseBranch: forked.branch,
+          },
+        },
+      ],
+      effects: effects as never,
+    });
+    return forked;
+  }
+
+  /**
+   * The native provider thread a task's conversation lives in, as the worker
+   * last reported it. `null` before the task's first turn.
+   */
+  providerThreadIdOf(taskId: string): string | null {
+    let providerThreadId: string | null = null;
+    for (const event of this.store.eventsSince(taskId, 0, 10_000)) {
+      const thread = event.payload.providerThread as Record<string, unknown> | undefined;
+      if (event.type === "thread.updated" && typeof thread?.providerThreadId === "string") {
+        providerThreadId = thread.providerThreadId;
+      }
+    }
+    return providerThreadId;
   }
 
   // -- lifecycle -----------------------------------------------------------
