@@ -1,0 +1,25 @@
+[Unit]
+Description=t3x control plane (T3 Code + Daytona task sandboxes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=t3x
+Group=t3x
+WorkingDirectory=/opt/t3-daytona
+EnvironmentFile=/etc/t3x/env
+ExecStart=/usr/bin/node /opt/t3-daytona/dist/src/cli.js serve --state-dir /var/lib/t3x --port 8087
+Restart=always
+RestartSec=2
+
+# The control plane needs to reach the Daytona API and the sandboxes it creates,
+# nothing else. Credentials live in /etc/t3x/env (0600, owner t3x).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/t3x
+
+[Install]
+WantedBy=multi-user.target

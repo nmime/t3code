@@ -1,0 +1,36 @@
+# GitHub Actions workflow for this repository.
+# Copy to .github/workflows/ci.yml (pushing a workflow file needs a token with
+# the `workflow` scope).
+
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["22.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: install
+        run: npm ci --no-audit --no-fund
+      - name: typecheck
+        run: npx tsc -p tsconfig.json --noEmit
+      - name: test
+        run: npm test
+      - name: upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-node-${{ matrix.node }}
+          path: |
+            /tmp/t3x-test-*
+          if-no-files-found: ignore

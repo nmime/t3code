@@ -1,0 +1,45 @@
+{
+  "name": "@t3tools/daytona",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Daytona task sandboxes for T3 Code: an always-on control plane that owns tasks, environment profiles and sandbox lifecycle, plus the execution worker that runs inside each sandbox.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "t3x": "./dist/src/cli.js"
+  },
+  "exports": {
+    "./contracts": {
+      "types": "./src/contracts/index.ts",
+      "import": "./src/contracts/index.ts"
+    },
+    "./server": {
+      "types": "./src/execution/ControlPlaneServer.ts",
+      "import": "./src/execution/ControlPlaneServer.ts"
+    },
+    "./worker": {
+      "types": "./src/worker/index.ts",
+      "import": "./src/worker/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/tests/unit/*.test.js dist/tests/integration/*.test.js",
+    "test:unit": "npm run build && node --test dist/tests/unit/*.test.js",
+    "test:integration": "npm run build && node --test dist/tests/integration/*.test.js",
+    "control-plane": "node dist/src/cli.js serve",
+    "worker": "node dist/src/worker/index.js"
+  },
+  "dependencies": {
+    "ws": "catalog:",
+    "yaml": "catalog:",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/ws": "catalog:"
+  }
+}

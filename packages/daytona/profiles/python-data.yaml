@@ -1,0 +1,44 @@
+apiVersion: t3-daytona/v1
+kind: EnvironmentProfile
+metadata:
+  name: python-data
+  version: 1
+  description: Python data work with OpenCode pointed at a self-hosted model gateway.
+
+runtime:
+  snapshot: python312-data-v1
+  resources:
+    cpu: 8
+    memoryGiB: 16
+    diskGiB: 40
+
+project:
+  workingDirectory: /workspace/project
+  setup:
+    - uv sync --frozen
+  allowedRepositories:
+    - git.example.com/team/*
+
+environment:
+  PYTHONUNBUFFERED: "1"
+
+secrets:
+  - name: OMNIROUTE_API_KEY
+    secretRef: omniroute-gateway
+    inject: headers
+    hostAllowlist:
+      - llm.example.com
+
+agents:
+  allowed:
+    - opencode
+    - codex
+  defaults:
+    provider: opencode
+    permissionMode: auto
+
+sandbox:
+  isolation: per-project
+  maxConcurrentTasks: 4
+  stopAfterIdleMinutes: 45
+  deleteAfterCompletedHours: 72

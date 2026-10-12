@@ -1,0 +1,49 @@
+apiVersion: t3-daytona/v1
+kind: EnvironmentProfile
+metadata:
+  name: typescript-backend
+  version: 3
+  description: Node 24 + pnpm backend work with Codex, Claude Code and OpenCode available.
+
+runtime:
+  platform: linux/amd64
+  snapshot: node24-dev-v3
+  resources:
+    cpu: 4
+    memoryGiB: 8
+
+project:
+  workingDirectory: /workspace/project
+  setup:
+    - corepack enable
+    - pnpm install --frozen-lockfile
+  allowedRepositories:
+    - github.com/nmime/*
+
+environment:
+  NODE_ENV: development
+  CI: "true"
+
+secrets:
+  - name: NPM_TOKEN
+    secretRef: npm-registry-readonly
+    inject: env
+
+agents:
+  allowed:
+    - codex
+    - claude
+    - opencode
+  defaults:
+    provider: codex
+    permissionMode: supervised
+
+configuration:
+  sources:
+    - profile: mac-config-v1
+
+sandbox:
+  isolation: per-project
+  maxConcurrentTasks: 4
+  stopAfterIdleMinutes: 30
+  deleteAfterCompletedHours: 48

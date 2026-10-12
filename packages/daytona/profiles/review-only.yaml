@@ -1,0 +1,33 @@
+apiVersion: t3-daytona/v1
+kind: EnvironmentProfile
+metadata:
+  name: review-only
+  version: 1
+  description: Cheap, short-lived sandbox for code review; supervised by default.
+
+runtime:
+  snapshot: node24-dev-v3
+  resources:
+    cpu: 2
+    memoryGiB: 4
+
+project:
+  workingDirectory: /workspace/project
+  setup: []
+
+environment:
+  NODE_ENV: production
+
+agents:
+  allowed:
+    - codex
+    - claude
+  defaults:
+    provider: claude
+    permissionMode: supervised
+
+sandbox:
+  # One-shot reviews: never share a checkout with a task that writes to it.
+  isolation: per-task
+  stopAfterIdleMinutes: 10
+  deleteAfterCompletedHours: 12

@@ -1,0 +1,29 @@
+{
+  "name": "@t3tools/provider-daytona",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Provider driver that runs a thread's agent inside a Daytona task sandbox, through a @t3tools/daytona control plane.",
+  "license": "MIT",
+  "exports": {
+    "./server": {
+      "types": "./src/server.ts",
+      "import": "./src/server.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test src/server/*.test.ts",
+    "pretest": "pnpm --filter @t3tools/daytona build"
+  },
+  "dependencies": {
+    "@t3tools/contracts": "workspace:*",
+    "@t3tools/daytona": "workspace:*",
+    "@t3tools/provider-core": "workspace:*",
+    "effect": "catalog:"
+  }
+}
