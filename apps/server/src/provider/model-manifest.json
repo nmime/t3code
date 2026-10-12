@@ -95,6 +95,11 @@
         { "range": ">=1.4.2", "status": "supported" },
         { "range": "<1.4.2", "status": "unknown" }
       ]
+    },
+    {
+      "driver": "daytona",
+      "t3CodeRange": ">=0.0.45",
+      "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
     }
   ],
   "currentModels": {
