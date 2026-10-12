@@ -20,14 +20,40 @@ using the real paths from `pingdotgg/t3code` (main branch).
 
 ## 2. Provider execution: `RemoteProviderAdapter`
 
-T3 resolves a provider instance to an adapter through
-`apps/server/src/orchestration-v2/ProviderAdapterRegistry.ts`, which builds
-drivers from `packages/provider-core/src/server/adapterDriver.ts` and
-`builtInProviderAdapterDrivers.ts`.
+T3 has **two** driver layers, and a remote provider needs both.
 
-Add a driver whose adapter is `src/orchestration-v2/RemoteProviderAdapter.ts`
-from this repository. It implements the same operation set as
-`ProviderAdapterV2` in `packages/provider-core/src/server/ProviderAdapter.ts`:
+The runtime layer is the **provider instance** driver
+(`packages/provider-core/src/server/driver.ts`, `ProviderDriver`). On boot,
+`apps/server/src/provider/ProviderInstanceRegistryHydration.ts` hydrates
+`ProviderInstanceRegistry` from `ServerSettings.providerInstances`, resolving
+each entry's `driver` slug against **`apps/server/src/provider/builtInDrivers.ts`
+(`BUILT_IN_DRIVERS`)**. Anything not in that array is not an error: it becomes an
+_unavailable shadow_ snapshot, and no thread can route to it. A new provider is
+therefore registered there, and the driver it names must return a whole
+`ProviderInstance` — snapshot, continuation identity, text generation and
+`orchestrationAdapter`.
+
+The adapter layer is the **orchestration-v2** driver
+(`packages/provider-core/src/server/adapterDriver.ts`,
+`ProviderAdapterDriver`), which is what `ProviderAdapterRegistryV2` looks up by
+`ProviderInstanceId` — through the instance the v1 driver produced, not through a
+list. `apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts` collects
+the v2 adapter drivers, but at the time of writing nothing in the runtime imports
+it: its only consumer is `Adapters/AcpRegistryAdapterV2.test.ts`, which asserts
+the ACP registry's kind is in the set. Registering a driver _only_ there leaves
+the provider unusable in a running server. Put it in both: the v1 driver in
+`builtInDrivers.ts` (what runs), the v2 adapter driver in
+`builtInProviderAdapterDrivers.ts` (what the sibling packages do, and what the
+replay tests build from).
+
+`@t3tools/provider-daytona` follows exactly this split: `DaytonaDriver` (v1) in
+`apps/server/src/provider/builtInDrivers.ts`, `DaytonaAdapterV2Driver` (v2) in
+`builtInProviderAdapterDrivers.ts`, its settings form in
+`apps/web/src/components/settings/providerDriverMeta.ts`, and its settings schema
+shared by both halves through the package's `./settings` export.
+
+The adapter itself implements the same operation set as `ProviderAdapterV2` in
+`packages/provider-core/src/server/ProviderAdapter.ts`:
 
 | T3 operation                    | Remote implementation                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------- |

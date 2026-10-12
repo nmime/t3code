@@ -85,6 +85,13 @@ export interface DaytonaEvent {
   ts: number;
 }
 
+/** One environment profile the control plane can provision a sandbox from. */
+export interface DaytonaProfile {
+  profileId: string;
+  version: number;
+  digest: string;
+}
+
 export interface DaytonaTaskStatus {
   task: DaytonaTask;
   sandboxScope: string;
@@ -186,6 +193,17 @@ export class DaytonaControlPlane {
 
   async health(): Promise<{ ok: boolean }> {
     return await this.request<{ ok: boolean }>("GET", "/health");
+  }
+
+  /**
+   * The profiles the control plane can provision from. This is the cheapest
+   * call that both proves the token is accepted and answers whether the
+   * profile an instance names actually exists — which is what the provider
+   * snapshot reports as this instance's health.
+   */
+  async listProfiles(): Promise<DaytonaProfile[]> {
+    const { profiles } = await this.request<{ profiles: DaytonaProfile[] }>("GET", "/profiles");
+    return profiles;
   }
 
   async listTasks(): Promise<DaytonaTask[]> {

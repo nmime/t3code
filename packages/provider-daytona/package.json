@@ -9,6 +9,14 @@
     "./server": {
       "types": "./src/server.ts",
       "import": "./src/server.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./src/client.ts"
     }
   },
   "scripts": {
@@ -21,5 +29,10 @@
     "@t3tools/daytona": "workspace:*",
     "@t3tools/provider-core": "workspace:*",
     "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@t3tools/provider-testing": "workspace:*",
+    "@types/node": "catalog:"
   }
 }
