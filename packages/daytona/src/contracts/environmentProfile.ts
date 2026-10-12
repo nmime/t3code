@@ -23,6 +23,19 @@ import { ExecutionError } from "./errors.js";
 
 export const PROFILE_API_VERSION = "t3-daytona/v1";
 
+/**
+ * T3's runtime modes, weakest first. The order is the comparison: a profile
+ * caps a turn by naming the strongest mode it permits, and a stricter layer
+ * can only lower that.
+ */
+export const RUNTIME_MODE_STRENGTH = [
+  "approval-required",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+] as const;
+export type RuntimeModeName = (typeof RUNTIME_MODE_STRENGTH)[number];
+
 export const SecretRefSchema = z.object({
   name: z.string().min(1),
   secretRef: z.string().min(1),
@@ -61,6 +74,19 @@ export const ProfileBodySchema = z.object({
   agents: z
     .object({
       allowed: z.array(z.string()).default([]),
+      /**
+       * The strongest T3 runtime mode this profile permits, weakest first:
+       * approval-required < auto-accept-edits < auto < full-access.
+       *
+       * Enforced by the control plane, not by the client: a turn asking for
+       * more than this is refused before it reaches a sandbox, and the mode a
+       * turn actually runs under is recorded with the turn. `full-access` (the
+       * default) caps nothing, which is what a deployment that trusts its
+       * clients wants.
+       */
+      maxRuntimeMode: z
+        .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
+        .default("full-access"),
       defaults: z
         .object({
           provider: z.string().min(1),
@@ -270,6 +296,9 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfile {
   const secretsByName = new Map<string, SecretRef>();
   const allowedAgents = new Set<string>();
   let repositoryConstraints: string[] | null = null;
+  // The strictest runtime-mode cap any layer asks for, since a project or task
+  // layer may tighten what a profile permits but never loosen it.
+  let runtimeModeCap: RuntimeModeName | null = null;
 
   for (const layer of input.layers) {
     const patch = layer.patch as Record<string, unknown>;
@@ -300,8 +329,21 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfile {
         continue;
       }
       if (key === "agents") {
-        const agents = value as { allowed?: string[]; defaults?: Record<string, unknown> };
+        const agents = value as {
+          allowed?: string[];
+          defaults?: Record<string, unknown>;
+          maxRuntimeMode?: RuntimeModeName;
+        };
         for (const a of agents.allowed ?? []) allowedAgents.add(a);
+        if (agents.maxRuntimeMode) {
+          runtimeModeCap =
+            runtimeModeCap === null
+              ? agents.maxRuntimeMode
+              : RUNTIME_MODE_STRENGTH.indexOf(agents.maxRuntimeMode) <
+                  RUNTIME_MODE_STRENGTH.indexOf(runtimeModeCap)
+                ? agents.maxRuntimeMode
+                : runtimeModeCap;
+        }
         if (agents.defaults) {
           scalarPatch.agents = deepMerge((merged.agents as Record<string, unknown>) ?? {}, {
             defaults: agents.defaults,
@@ -374,6 +416,7 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfile {
   }
   candidate.agents = deepMerge((candidate.agents as Record<string, unknown>) ?? {}, {
     allowed: effectiveAgents,
+    ...(runtimeModeCap === null ? {} : { maxRuntimeMode: runtimeModeCap }),
   });
 
   const secretList = [...secretsByName.values()].filter((s) => {

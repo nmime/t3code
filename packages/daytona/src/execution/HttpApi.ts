@@ -148,6 +148,10 @@ export class HttpApi {
           const result = this.deps.tasks.sendMessage(taskId, {
             text: String(body.text ?? ""),
             ...(body.model ? { model: String(body.model) } : {}),
+            ...(body.runtimeMode ? { runtimeMode: String(body.runtimeMode) as never } : {}),
+            ...(body.interactionMode
+              ? { interactionMode: String(body.interactionMode) as never }
+              : {}),
           });
           return send(res, 202, result);
         }

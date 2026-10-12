@@ -217,7 +217,11 @@ export class EchoRuntime implements WorkerProviderRuntime {
       payload.threadId,
       providerTurnId,
       payload.runId,
-      `echo: ${payload.message.text}`,
+      // The runtime mode the turn arrived under is quoted back: echo is the
+      // deterministic runtime the test suite drives, and a test has to be able
+      // to see that the mode a client asked for reached the sandbox and that
+      // the control plane capped it before it did.
+      `echo[${payload.runtimePolicy?.runtimeMode ?? "none"}]: ${payload.message.text}`,
     );
   }
 

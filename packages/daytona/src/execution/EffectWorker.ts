@@ -16,6 +16,7 @@ import type { SandboxControlPlane } from "./SandboxControlPlane.js";
 import { RemoteProviderAdapter } from "../orchestration-v2/RemoteProviderAdapter.js";
 import type { WorkerConnectionRegistry } from "./WorkerConnectionRegistry.js";
 import { TaskStateMachine } from "./TaskStateMachine.js";
+import { DEFAULT_RUNTIME_MODE } from "./TaskService.js";
 import type { RemoteWorkspaceService } from "./RemoteWorkspaceService.js";
 import { errorPayload } from "../contracts/errors.js";
 import type { TaskRecord } from "../contracts/execution.js";
@@ -273,16 +274,24 @@ export class EffectWorker {
     // The agent runs in *this task's* directory: its worktree inside a shared
     // project sandbox, or the checkout of its dedicated sandbox.
     const cwd = this.workspace.rootFor(effect.taskId) ?? null;
+    // The mode the turn runs under: what the client asked for, already capped
+    // against the task's pinned profile when the message was accepted. This
+    // used to be the hardcoded pair below, which told the sandbox a mode T3
+    // does not have and dropped the client's own choice entirely.
+    const requestedPolicy = payload.runtimePolicy as
+      | { runtimeMode?: string; interactionMode?: string }
+      | undefined;
+    const runtimePolicy = {
+      runtimeMode: requestedPolicy?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+      interactionMode: requestedPolicy?.interactionMode ?? "default",
+      cwd,
+      reasoningEffort: "medium",
+    };
 
     const ensured = await adapter.ensureThread({
       threadId: task.threadId,
       model: task.model,
-      runtimePolicy: {
-        runtimeMode: "interactive",
-        interactionMode: "supervised",
-        cwd,
-        reasoningEffort: "medium",
-      },
+      runtimePolicy,
     });
 
     // Mark the task running before the turn starts: a provider may emit its
@@ -307,12 +316,7 @@ export class EffectWorker {
           creationSource: "client",
         },
         model: task.model,
-        runtimePolicy: {
-          runtimeMode: "interactive",
-          interactionMode: "supervised",
-          cwd,
-          reasoningEffort: "medium",
-        },
+        runtimePolicy,
       },
       effect.effectId,
     );

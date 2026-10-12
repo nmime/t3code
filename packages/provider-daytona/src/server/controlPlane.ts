@@ -56,6 +56,8 @@ export interface DaytonaProviderInventory {
 }
 
 export interface DaytonaSnapshot {
+  /** The strongest runtime mode the task's pinned profile permits. */
+  runtimeModeCap?: string;
   taskId: string;
   state: string;
   threadId: string;
@@ -267,11 +269,23 @@ export class DaytonaControlPlane {
     return snapshot;
   }
 
-  async sendMessage(taskId: string, text: string, model?: string): Promise<{ runId: string }> {
+  async sendMessage(
+    taskId: string,
+    text: string,
+    model?: string,
+    runtimePolicy?: { runtimeMode?: string; interactionMode?: string },
+  ): Promise<{ runId: string }> {
     return await this.request<{ runId: string }>(
       "POST",
       `/tasks/${encodeURIComponent(taskId)}/messages`,
-      { text, ...(model ? { model } : {}) },
+      {
+        text,
+        ...(model ? { model } : {}),
+        ...(runtimePolicy?.runtimeMode ? { runtimeMode: runtimePolicy.runtimeMode } : {}),
+        ...(runtimePolicy?.interactionMode
+          ? { interactionMode: runtimePolicy.interactionMode }
+          : {}),
+      },
     );
   }
 

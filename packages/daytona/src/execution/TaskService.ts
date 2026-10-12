@@ -21,12 +21,26 @@ import type { RemoteWorkspaceService } from "./RemoteWorkspaceService.js";
 import type { ProjectSandboxStore } from "./ProjectSandboxStore.js";
 import { TaskStateMachine } from "./TaskStateMachine.js";
 
+/** T3's runtime modes, weakest first: index order is the comparison. */
+export const RUNTIME_MODES = [
+  "approval-required",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+] as const;
+export type RuntimeMode = (typeof RUNTIME_MODES)[number];
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+
 export interface SendMessageInput {
   text: string;
   attachments?: unknown[];
   createdBy?: string;
   /** Override the model for this turn (task override layer). */
   model?: string;
+  /** T3's runtime mode for this turn; capped by the profile (see below). */
+  runtimeMode?: RuntimeMode;
+  /** T3's interaction mode for this turn: `default`, or `plan` to plan first. */
+  interactionMode?: "default" | "plan";
 }
 
 export class TaskService {
@@ -54,6 +68,36 @@ export class TaskService {
    */
   forkTask(input: { sourceTaskId: string; threadId: string }): TaskRecord {
     return this.controlPlane.forkTask(input);
+  }
+
+  /**
+   * The runtime mode a turn will actually run under: what the caller asked for,
+   * or the task's own default, refused if it is stronger than the profile this
+   * task was pinned to permits.
+   *
+   * This is the server-side half of T3's runtime modes. The client no longer
+   * has the last word — a deployment that caps its profiles cannot be talked
+   * past by a client — and the mode is recorded with the turn, so what ran is
+   * knowable after the fact.
+   */
+  private resolveRuntimePolicy(
+    task: TaskRecord,
+    input: SendMessageInput,
+  ): { runtimeMode: string; interactionMode: string; cwd: string | null } {
+    const requested = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+    const cap = task.profile.body.agents.maxRuntimeMode;
+    if (RUNTIME_MODES.indexOf(requested) > RUNTIME_MODES.indexOf(cap)) {
+      throw new ExecutionError(
+        "capability_unsupported",
+        `This task's profile permits runtime mode '${cap}' at most; the turn asked for '${requested}'.`,
+        { taskId: task.taskId, profileId: task.profileId, requested, cap },
+      );
+    }
+    return {
+      runtimeMode: requested,
+      interactionMode: input.interactionMode ?? "default",
+      cwd: task.worktreePath || task.workspaceRoot,
+    };
   }
 
   getTask(taskId: string): TaskRecord {
@@ -216,6 +260,7 @@ export class TaskService {
   /** Queue a message; the turn starts when the effect worker picks it up. */
   sendMessage(taskId: string, input: SendMessageInput): { runId: string; effectId: string } {
     const task = this.states.assertAcceptsMessages(taskId);
+    const runtimePolicy = this.resolveRuntimePolicy(task, input);
     const runId = newRunId();
     const effectId = newEffectId();
     const commandId = newCommandId();
@@ -251,6 +296,7 @@ export class TaskService {
             messageId: `msg_${runId}`,
             text: input.text,
             model: input.model ?? task.model,
+            runtimePolicy,
           },
           leaseEpoch: task.leaseEpoch,
         },
@@ -657,6 +703,11 @@ export class TaskService {
       driver: task.provider,
       model: task.model,
       permissionMode: task.permissionMode,
+      /**
+       * The strongest runtime mode this task's pinned profile permits. A client
+       * reports enforcement as native only when this caps something.
+       */
+      runtimeModeCap: task.profile.body.agents.maxRuntimeMode,
       lastSeq: task.lastEventSequence,
       turns,
       messages: coherent,

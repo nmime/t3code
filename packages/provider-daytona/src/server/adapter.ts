@@ -72,7 +72,9 @@ export const makeAdapter = (
   const refreshCapabilities = async (taskId: string): Promise<void> => {
     const snapshot = await client.snapshot(taskId);
     const inventory = snapshot.capabilities.find((entry) => entry.driver === agent);
-    if (inventory) capabilities = capabilitiesFromWorker(inventory.capabilities, agent);
+    if (inventory) {
+      capabilities = capabilitiesFromWorker(inventory.capabilities, agent, snapshot.runtimeModeCap);
+    }
   };
 
   const ensureTask = async (
@@ -260,6 +262,13 @@ export const makeAdapter = (
                 task.taskId,
                 turnInput.message.text,
                 turnInput.modelSelection.model,
+                {
+                  // T3 decides the mode per turn; the control plane caps it
+                  // against the task's pinned profile and refuses a stronger
+                  // one, so this is a request, not an instruction.
+                  runtimeMode: turnInput.runtimePolicy.runtimeMode,
+                  interactionMode: turnInput.runtimePolicy.interactionMode,
+                },
               );
             },
             catch: (cause) =>

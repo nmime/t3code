@@ -54,6 +54,7 @@ export const workerCapabilitiesForAgent = (agent: string | undefined): WorkerCap
 export const capabilitiesFromWorker = (
   worker: Partial<WorkerCapabilities> | undefined,
   fallbackAgent?: string,
+  runtimeModeCap?: string,
 ): OrchestrationV2ProviderCapabilities => {
   const base = workerCapabilitiesForAgent(fallbackAgent);
   const capabilities: WorkerCapabilities = { ...base, ...(worker ?? {}) };
@@ -151,9 +152,13 @@ export const capabilitiesFromWorker = (
       nativeRequestIds: "strong",
     },
     runtimePolicy: {
-      // The agent runs inside a sandbox whose profile carries the environment,
-      // but T3's runtime modes are enforced where T3 mediates the work.
-      enforcement: "client-boundary",
+      // "native" only when the task's pinned profile actually caps the runtime
+      // mode: the control plane then refuses a stronger turn before it reaches
+      // a sandbox, and records the mode the turn ran under. With the default
+      // cap of `full-access` nothing is restricted, and saying otherwise would
+      // be an overclaim — the agent's own flags are the profile's business.
+      enforcement:
+        runtimeModeCap && runtimeModeCap !== "full-access" ? "native" : "client-boundary",
     },
   };
 };

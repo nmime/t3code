@@ -427,3 +427,54 @@ test("text generation answers a prompt in the sandbox without touching the conve
     },
   );
 });
+
+test("a profile caps the runtime mode a turn may run under", async () => {
+  server.profiles.createProfile({
+    profileId: "capped",
+    body: {
+      ...profile,
+      metadata: { name: "capped", version: 1 },
+      agents: {
+        allowed: ["echo", "codex"],
+        defaults: { provider: "echo" },
+        maxRuntimeMode: "auto-accept-edits",
+      },
+    } as never,
+  });
+
+  const task = await client.createTask({
+    profileId: "capped",
+    provider: "echo",
+    repositoryUrl: "",
+  });
+  await server.effectWorker.drain();
+  await waitFor(() => server.registry.isConnected(task.taskId), 30_000, "worker attach");
+  await waitFor(() => server.tasks.getTask(task.taskId).state === "ready", 15_000, "ready");
+
+  // What this deployment enforces is part of the snapshot a client reads.
+  const snapshot = await client.snapshot(task.taskId);
+  assert.equal(snapshot.runtimeModeCap, "auto-accept-edits");
+
+  // A turn stronger than the cap is refused before it reaches a sandbox.
+  await assert.rejects(
+    () =>
+      client.sendMessage(task.taskId, "do everything", undefined, { runtimeMode: "full-access" }),
+    (error: Error) => {
+      assert.ok(error instanceof DaytonaControlPlaneError);
+      assert.equal(error.code, "capability_unsupported");
+      assert.match(error.message, /permits runtime mode 'auto-accept-edits'/);
+      return true;
+    },
+  );
+
+  // Within the cap the turn runs, and the mode it ran under reached the
+  // sandbox: the agent reports the one it was handed.
+  await client.sendMessage(task.taskId, "tidy up", undefined, {
+    runtimeMode: "auto-accept-edits",
+  });
+  await server.effectWorker.drain();
+  await waitFor(() => server.tasks.getTask(task.taskId).state === "ready", 15_000, "turn end");
+  const messages = (await client.snapshot(task.taskId)).messages;
+  const reply = messages.find((message) => message.role === "assistant");
+  assert.match(String(reply?.text), /echo\[auto-accept-edits\]/);
+});
