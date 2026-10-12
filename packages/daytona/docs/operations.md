@@ -88,7 +88,7 @@ has been offline replays from its last sequence number and never sees a gap.
 
 - stuck effects are requeued;
 - workers are reattached, or a fresh worker is started for a surviving sandbox;
-- tasks whose sandbox disappeared are *restored* from the pinned profile and
+- tasks whose sandbox disappeared are _restored_ from the pinned profile and
   marked `resumeKind: "restored"` — never claimed as a seamless resume;
 - idle tasks are stopped, over-budget tasks are stopped, completed tasks are
   destroyed after their retention window;
@@ -105,10 +105,10 @@ Run it manually with `node dist/src/cli.js reconcile`.
 `sandbox.isolation: per-task` in the profile; `POST /projects` for a project
 override) decides where a new task runs:
 
-| Scope | What it means |
-|---|---|
+| Scope               | What it means                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `project` (default) | one sandbox per repository, shared by its tasks; each task gets its own git worktree at `/workspace/worktrees/<taskId>` |
-| `task` | a sandbox of its own, created for the task and destroyed with it |
+| `task`              | a sandbox of its own, created for the task and destroyed with it                                                        |
 
 Resolution is task request → project default → global default, computed once at
 creation and stored on the task (`sandboxScope`, `projectId`, `worktreePath`,
@@ -140,22 +140,22 @@ back over the same checkout and worktrees, and retention destroys it later.
 
 ## Cost controls
 
-| Policy | Default | Where |
-|---|---|---|
-| Stop after idle | 30 min (min of policy and profile) | `PolicyEngine` |
-| Stop a project sandbox | only at refcount 0 **and** idle | `PolicyEngine.evaluateSandboxes` |
-| Tasks per project sandbox | 4 (project and profile limit, whichever is tighter) | `sandbox.maxConcurrentTasks` |
-| Delete completed sandboxes | 48 h | `PolicyEngine` |
-| Never auto-stop while executing | always | `PolicyEngine` |
-| Per-task budget | unset | `TaskRecord.budgetCents` |
+| Policy                          | Default                                             | Where                            |
+| ------------------------------- | --------------------------------------------------- | -------------------------------- |
+| Stop after idle                 | 30 min (min of policy and profile)                  | `PolicyEngine`                   |
+| Stop a project sandbox          | only at refcount 0 **and** idle                     | `PolicyEngine.evaluateSandboxes` |
+| Tasks per project sandbox       | 4 (project and profile limit, whichever is tighter) | `sandbox.maxConcurrentTasks`     |
+| Delete completed sandboxes      | 48 h                                                | `PolicyEngine`                   |
+| Never auto-stop while executing | always                                              | `PolicyEngine`                   |
+| Per-task budget                 | unset                                               | `TaskRecord.budgetCents`         |
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `execution_target_unavailable` | no worker attached | `task resume`, or let `reconcile` reattach |
-| `unauthorized` on the worker socket | token used twice, expired, or for another task | reattach the worker; tokens are single-use and rotated on each connect |
-| `lease_fenced` in worker logs | a replacement worker took the task | expected: the stale worker exits |
-| `capability_unsupported` | the provider cannot do that (steer/rollback/fork) | check `GET /tasks/:id` → `worker.providers[].capabilities` |
-| turn stuck in `running` | provider died mid-turn | `turn.start` failure releases the task to `ready` after retries |
-| `profile_invalid` | YAML fails schema validation | the error lists the offending paths |
+| Symptom                             | Cause                                             | Fix                                                                    |
+| ----------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `execution_target_unavailable`      | no worker attached                                | `task resume`, or let `reconcile` reattach                             |
+| `unauthorized` on the worker socket | token used twice, expired, or for another task    | reattach the worker; tokens are single-use and rotated on each connect |
+| `lease_fenced` in worker logs       | a replacement worker took the task                | expected: the stale worker exits                                       |
+| `capability_unsupported`            | the provider cannot do that (steer/rollback/fork) | check `GET /tasks/:id` → `worker.providers[].capabilities`             |
+| turn stuck in `running`             | provider died mid-turn                            | `turn.start` failure releases the task to `ready` after retries        |
+| `profile_invalid`                   | YAML fails schema validation                      | the error lists the offending paths                                    |

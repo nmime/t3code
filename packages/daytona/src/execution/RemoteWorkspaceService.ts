@@ -10,10 +10,7 @@
 
 import * as path from "node:path";
 import type { GitStatus, WorkspaceEntry, WorkspaceExecution } from "../contracts/execution.js";
-import {
-  ExecutionTargetUnavailableError,
-  PathOutsideWorkspaceError,
-} from "../contracts/errors.js";
+import { ExecutionTargetUnavailableError, PathOutsideWorkspaceError } from "../contracts/errors.js";
 import type {
   CheckpointCapturePayload,
   CheckpointDiffPayload,

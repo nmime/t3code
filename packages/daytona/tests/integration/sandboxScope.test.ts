@@ -186,7 +186,8 @@ test("reuse only between compatible environments", async () => {
     // reuse it, so the project holds one sandbox per environment.
     assert.equal(otherSnapshot.sandboxScope, "project");
     assert.equal(
-      server.projects.listProjectSandboxes(a.projectId!).filter((s) => s.state !== "deleted").length,
+      server.projects.listProjectSandboxes(a.projectId!).filter((s) => s.state !== "deleted")
+        .length,
       3,
     );
   } finally {
@@ -393,10 +394,7 @@ test("client surface reports scope, worktree and shared-sandbox facts", async ()
 
     const sandboxes = server.tasks.listSandboxes();
     assert.equal(sandboxes.length, 1);
-    assert.deepEqual(
-      (sandboxes[0]!.boundTasks as string[]).sort(),
-      [a.taskId, b.taskId].sort(),
-    );
+    assert.deepEqual((sandboxes[0]!.boundTasks as string[]).sort(), [a.taskId, b.taskId].sort());
     assert.equal(server.tasks.projectSandboxes(a.projectId!).length, 1);
     assert.equal(server.tasks.listProjects()[0]!.projectId, a.projectId);
   } finally {

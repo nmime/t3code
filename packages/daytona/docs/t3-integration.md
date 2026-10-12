@@ -1,6 +1,6 @@
 # Wiring this into a T3 Code fork
 
-The report's conclusion is that this system is an *extension* to T3's
+The report's conclusion is that this system is an _extension_ to T3's
 Orchestration V2, not a standalone replacement: conversation state, projections
 and the event log stay on the VPS, while provider sessions, Git, checkpoints and
 the repository move into the task sandbox.
@@ -10,13 +10,13 @@ using the real paths from `pingdotgg/t3code` (main branch).
 
 ## 1. What stays exactly as it is
 
-| T3 component | Why it stays |
-|---|---|
-| `apps/server/src/orchestration-v2/EventStore.ts` + `EventSink.ts` | Authoritative conversation state lives on the VPS, as this project's `EventStore` does for execution state. |
+| T3 component                                                           | Why it stays                                                                                                |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `apps/server/src/orchestration-v2/EventStore.ts` + `EventSink.ts`      | Authoritative conversation state lives on the VPS, as this project's `EventStore` does for execution state. |
 | `apps/server/src/orchestration-v2/EffectOutbox.ts` + `EffectWorker.ts` | The transactional outbox pattern is reused verbatim; execution adds effect kinds instead of a second queue. |
-| `apps/server/src/orchestration-v2/CommandReceiptStore.ts` | Command receipts already give idempotent client retries. |
-| `packages/contracts` (chat, thread, projection schemas) | Clients (Mac, mobile) must keep speaking the schemas they already speak. |
-| Approval / runtime-request projections | The remote path re-emits the same `runtime_request.updated` shape. |
+| `apps/server/src/orchestration-v2/CommandReceiptStore.ts`              | Command receipts already give idempotent client retries.                                                    |
+| `packages/contracts` (chat, thread, projection schemas)                | Clients (Mac, mobile) must keep speaking the schemas they already speak.                                    |
+| Approval / runtime-request projections                                 | The remote path re-emits the same `runtime_request.updated` shape.                                          |
 
 ## 2. Provider execution: `RemoteProviderAdapter`
 
@@ -29,15 +29,15 @@ Add a driver whose adapter is `src/orchestration-v2/RemoteProviderAdapter.ts`
 from this repository. It implements the same operation set as
 `ProviderAdapterV2` in `packages/provider-core/src/server/ProviderAdapter.ts`:
 
-| T3 operation | Remote implementation |
-|---|---|
-| `openSession` | `session.open` command to the task worker |
-| `ensureThread` / `resumeThread` | `thread.ensure` / `thread.resume` |
-| `startTurn` | `turn.start` (idempotent by `effectId`) |
-| `interrupt` / `steerRun` | `turn.interrupt` / `turn.steer`, gated on capability flags |
-| `respondRuntimeRequest` | `runtime_request.respond` |
-| `rollbackThread` / `forkThread` | `thread.rollback` / `thread.fork`, gated on capability flags |
-| `events` stream | Worker events persisted by `WorkerConnectionRegistry`, replayed from the store, then live |
+| T3 operation                    | Remote implementation                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `openSession`                   | `session.open` command to the task worker                                                 |
+| `ensureThread` / `resumeThread` | `thread.ensure` / `thread.resume`                                                         |
+| `startTurn`                     | `turn.start` (idempotent by `effectId`)                                                   |
+| `interrupt` / `steerRun`        | `turn.interrupt` / `turn.steer`, gated on capability flags                                |
+| `respondRuntimeRequest`         | `runtime_request.respond`                                                                 |
+| `rollbackThread` / `forkThread` | `thread.rollback` / `thread.fork`, gated on capability flags                              |
+| `events` stream                 | Worker events persisted by `WorkerConnectionRegistry`, replayed from the store, then live |
 
 `capabilities()` comes from the worker's advertised inventory, so
 `ProviderAdapterCapabilitiesError`-style mistakes (claiming steering for a CLI
@@ -51,13 +51,13 @@ kinds alongside the existing `provider-turn.start`, `provider-turn.interrupt`,
 `runtime-request.respond`, `provider-thread.rollback` and `checkpoint.capture`
 effects:
 
-| New effect | Work |
-|---|---|
-| `task.provision` | Resolve the pinned profile, create the sandbox, inject secrets, clone the repo, apply configuration sources, start the worker |
-| `task.ensure_ready` | Attach (or reattach) the worker before a turn starts |
-| `task.stop` / `task.resume` / `task.restore` / `task.destroy` | Lifecycle, with `resume` vs `restore` kept distinct |
-| `turn.start` | Ensure thread, mark running, start the turn with the effect id as idempotency key |
-| `checkpoint.capture` / `checkpoint.restore` | Route to the sandbox's hidden git refs |
+| New effect                                                    | Work                                                                                                                          |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `task.provision`                                              | Resolve the pinned profile, create the sandbox, inject secrets, clone the repo, apply configuration sources, start the worker |
+| `task.ensure_ready`                                           | Attach (or reattach) the worker before a turn starts                                                                          |
+| `task.stop` / `task.resume` / `task.restore` / `task.destroy` | Lifecycle, with `resume` vs `restore` kept distinct                                                                           |
+| `turn.start`                                                  | Ensure thread, mark running, start the turn with the effect id as idempotency key                                             |
+| `checkpoint.capture` / `checkpoint.restore`                   | Route to the sandbox's hidden git refs                                                                                        |
 
 `ProviderSessionManager` and `ProviderTurnStartService` in
 `apps/server/src/orchestration-v2/` should call `SandboxControlPlane.ensureReady`
@@ -85,7 +85,7 @@ sandbox, captured through a temporary index so the agent's index is untouched.
 - `EnvironmentProfileService` replaces ad-hoc provider-instance settings with a
   versioned, layered profile. The resolved profile and its digest are pinned on
   the task (`TaskRecord.profileDigest`) and re-verified on recovery.
-- `SecretsBroker` holds credential *values*; profiles hold references. A profile
+- `SecretsBroker` holds credential _values_; profiles hold references. A profile
   can only materialize what policy allows, and `redact()` scrubs values from
   anything that leaves the control plane.
 - Provider-native logins (ChatGPT OAuth, Claude/Cursor interactive login) still
@@ -133,7 +133,7 @@ fork only has to pass it through. What changes in the fork:
 - `apps/server/src/git/*` and the checkpoint store keep going through
   `RemoteWorkspaceService`; they are now root-relative to that worktree, and the
   base checkout is never handed to a task.
-- Threads are still T3's unit of conversation. They are deliberately *not* the
+- Threads are still T3's unit of conversation. They are deliberately _not_ the
   unit of isolation: many threads (and many tasks) can share one sandbox, and
   each still gets its own worktree.
 - The frontend needs one new page for execution settings: the project list with

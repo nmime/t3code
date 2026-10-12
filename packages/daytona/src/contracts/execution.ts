@@ -230,11 +230,7 @@ export interface ProviderRuntimePort {
     model: string;
     runtimePolicy: SessionOpenPayload["runtimePolicy"];
   }): Promise<void>;
-  interrupt(input: {
-    threadId: string;
-    runId: string;
-    providerTurnId: string;
-  }): Promise<void>;
+  interrupt(input: { threadId: string; runId: string; providerTurnId: string }): Promise<void>;
   steer(input: {
     threadId: string;
     runId: string;

@@ -85,18 +85,10 @@ export async function createTask(
 }
 
 /** Send a message and wait until the task is no longer running. */
-export async function sendMessage(
-  server: TestServer,
-  taskId: string,
-  text: string,
-): Promise<void> {
+export async function sendMessage(server: TestServer, taskId: string, text: string): Promise<void> {
   server.tasks.sendMessage(taskId, { text });
   await server.effectWorker.drain();
-  await waitFor(
-    () => server.tasks.getTask(taskId).state !== "running",
-    30_000,
-    "turn to finish",
-  );
+  await waitFor(() => server.tasks.getTask(taskId).state !== "running", 30_000, "turn to finish");
 }
 
 export async function waitFor(
@@ -131,7 +123,11 @@ export function sandboxHome(server: TestServer, task: TaskRecord): string {
 }
 
 /** Local (host) path of a sandbox-absolute path inside a task's sandbox. */
-export function sandboxPath(server: TestServer, sandboxId: string, sandboxAbsolute: string): string {
+export function sandboxPath(
+  server: TestServer,
+  sandboxId: string,
+  sandboxAbsolute: string,
+): string {
   return path.join(server.stateDir, "sandboxes", sandboxId, sandboxAbsolute.replace(/^\//, ""));
 }
 

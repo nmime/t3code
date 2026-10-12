@@ -140,9 +140,7 @@ export class ControlPlaneServer {
       stateDir,
       workerUrl: `http://127.0.0.1:${options.port ?? 8087}/worker`,
       workerEntry: options.workerEntry ?? defaultWorkerEntry(),
-      ...(options.globalDefaultScope
-        ? { globalDefaultScope: options.globalDefaultScope }
-        : {}),
+      ...(options.globalDefaultScope ? { globalDefaultScope: options.globalDefaultScope } : {}),
       ...(options.launcher ? { launcher: options.launcher } : {}),
       ...(options.workerAttachTimeoutMs
         ? { workerAttachTimeoutMs: options.workerAttachTimeoutMs }

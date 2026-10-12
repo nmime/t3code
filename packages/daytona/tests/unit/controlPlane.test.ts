@@ -9,7 +9,10 @@ import { SecretsBroker } from "../../src/execution/SecretsBroker.js";
 import { PolicyEngine } from "../../src/execution/PolicyEngine.js";
 import { ConfigBundleStore } from "../../src/config-importer/ConfigBundle.js";
 import { importLocalConfigs } from "../../src/config-importer/importer.js";
-import { IdempotencyConflictError, SecretPolicyViolationError } from "../../src/contracts/errors.js";
+import {
+  IdempotencyConflictError,
+  SecretPolicyViolationError,
+} from "../../src/contracts/errors.js";
 import { testProfile } from "../helpers.js";
 import { resolveProfile } from "../../src/contracts/environmentProfile.js";
 import type { TaskRecord } from "../../src/contracts/execution.js";
@@ -84,9 +87,7 @@ test("command receipts are idempotent and effects are deduplicated", () => {
     kind: "message.send",
     payload: { text: "hi" },
     events: [{ type: "message.accepted", payload: { text: "hi" } }],
-    effects: [
-      { effectId: "fx_1", kind: "turn.start", payload: { runId: "run_1" }, leaseEpoch: 0 },
-    ],
+    effects: [{ effectId: "fx_1", kind: "turn.start", payload: { runId: "run_1" }, leaseEpoch: 0 }],
   };
 
   const first = store.submitCommand(input);
@@ -160,10 +161,7 @@ test("secrets are encrypted at rest, scoped per profile and redacted", () => {
   assert.ok(!row.ciphertext.includes("npm_supersecret_value"));
   assert.equal(broker.get("NPM_TOKEN", "typescript-backend"), "npm_supersecret_value");
 
-  assert.throws(
-    () => broker.get("NPM_TOKEN", "another-profile"),
-    SecretPolicyViolationError,
-  );
+  assert.throws(() => broker.get("NPM_TOKEN", "another-profile"), SecretPolicyViolationError);
 
   const materialized = broker.materialize(
     [{ name: "NPM_TOKEN", secretRef: "NPM_TOKEN", inject: "env", hostAllowlist: [] }],
@@ -191,9 +189,7 @@ test("policy engine stops idle tasks, enforces budget and retains completed ones
   const store = new EventStore(path.join(stateDir(), "db.sqlite"));
   const now = Date.now();
 
-  store.insertTask(
-    taskRecord({ taskId: "idle", state: "ready", idleSince: now - 90 * 60_000 }),
-  );
+  store.insertTask(taskRecord({ taskId: "idle", state: "ready", idleSince: now - 90 * 60_000 }));
   store.insertTask(
     taskRecord({
       taskId: "over-budget",

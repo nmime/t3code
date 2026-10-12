@@ -76,11 +76,7 @@ test("a thread becomes a task, and a turn becomes a message", async () => {
   assert.equal(task.state, "pending");
 
   await server.effectWorker.drain();
-  await waitFor(
-    () => server.registry.isConnected(task.taskId),
-    30_000,
-    "worker attach",
-  );
+  await waitFor(() => server.registry.isConnected(task.taskId), 30_000, "worker attach");
   await waitFor(() => server.tasks.getTask(task.taskId).state === "ready", 15_000, "ready");
 
   // The task is findable by the thread id a client already holds.

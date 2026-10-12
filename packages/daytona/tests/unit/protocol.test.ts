@@ -120,7 +120,10 @@ test("protocol negotiation picks the highest shared version", () => {
 });
 
 test("canonical JSON is order-independent", () => {
-  assert.equal(canonicalize({ b: 1, a: [2, { d: 3, c: 4 }] }), canonicalize({ a: [2, { c: 4, d: 3 }], b: 1 }));
+  assert.equal(
+    canonicalize({ b: 1, a: [2, { d: 3, c: 4 }] }),
+    canonicalize({ a: [2, { c: 4, d: 3 }], b: 1 }),
+  );
   assert.equal(payloadHash({ a: 1, b: 2 }), payloadHash({ b: 2, a: 1 }));
 });
 

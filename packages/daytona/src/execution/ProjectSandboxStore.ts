@@ -114,9 +114,7 @@ export class ProjectSandboxStore {
       name: String(row.name),
       repositoryUrl: String(row.repository_url),
       defaultScope: (row.default_scope as SandboxScope | null) ?? null,
-      environmentProfileId: row.environment_profile_id
-        ? String(row.environment_profile_id)
-        : null,
+      environmentProfileId: row.environment_profile_id ? String(row.environment_profile_id) : null,
       maxConcurrentTasks: Number(row.max_concurrent_tasks),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
@@ -208,10 +206,7 @@ export class ProjectSandboxStore {
    * key matches exactly — same repository, resolved profile, snapshot, platform
    * and credential trust domain.
    */
-  findReusableSandbox(
-    projectId: string,
-    compatibilityKey: string,
-  ): ProjectSandboxRecord | null {
+  findReusableSandbox(projectId: string, compatibilityKey: string): ProjectSandboxRecord | null {
     const row = this.db.handle
       .prepare(
         `SELECT * FROM project_sandboxes

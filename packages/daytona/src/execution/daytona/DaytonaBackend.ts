@@ -129,11 +129,11 @@ export class DaytonaBackend implements SandboxBackend {
     for (const step of spec.setup) {
       const result = await sandbox.process.executeCommand(step, { cwd: spec.workingDirectory });
       if (result.exitCode !== 0) {
-        throw new ExecutionError(
-          "internal",
-          `Setup step failed (${result.exitCode}): ${step}`,
-          { taskId: spec.taskId, sandboxId: id, stderr: result.stderr ?? result.result ?? "" },
-        );
+        throw new ExecutionError("internal", `Setup step failed (${result.exitCode}): ${step}`, {
+          taskId: spec.taskId,
+          sandboxId: id,
+          stderr: result.stderr ?? result.result ?? "",
+        });
       }
     }
 

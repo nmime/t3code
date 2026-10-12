@@ -197,10 +197,14 @@ export class LocalBackend implements SandboxBackend {
       : path.resolve(root, "workspace", target);
     const rel = path.relative(root, resolved);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
-      throw new ExecutionError("path_outside_workspace", `Path ${target} escapes sandbox ${sandboxId}.`, {
-        sandboxId,
-        target,
-      });
+      throw new ExecutionError(
+        "path_outside_workspace",
+        `Path ${target} escapes sandbox ${sandboxId}.`,
+        {
+          sandboxId,
+          target,
+        },
+      );
     }
     return resolved;
   }
@@ -258,7 +262,9 @@ export class LocalBackend implements SandboxBackend {
       child.stdout.on("data", (chunk: Buffer) => {
         if (stdout.length + chunk.length > MAX_OUTPUT_BYTES) {
           truncated = true;
-          stdout += chunk.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - stdout.length)).toString("utf8");
+          stdout += chunk
+            .subarray(0, Math.max(0, MAX_OUTPUT_BYTES - stdout.length))
+            .toString("utf8");
           child.kill("SIGKILL");
           return;
         }
@@ -267,7 +273,9 @@ export class LocalBackend implements SandboxBackend {
       child.stderr.on("data", (chunk: Buffer) => {
         if (stderr.length + chunk.length > MAX_OUTPUT_BYTES) {
           truncated = true;
-          stderr += chunk.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - stderr.length)).toString("utf8");
+          stderr += chunk
+            .subarray(0, Math.max(0, MAX_OUTPUT_BYTES - stderr.length))
+            .toString("utf8");
           child.kill("SIGKILL");
           return;
         }

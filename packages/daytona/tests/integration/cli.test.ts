@@ -10,14 +10,23 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fakeAgentBinDir, startTestServer, tempStateDir, testProfile, waitFor } from "../helpers.js";
+import {
+  fakeAgentBinDir,
+  startTestServer,
+  tempStateDir,
+  testProfile,
+  waitFor,
+} from "../helpers.js";
 
 const run = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const cli = path.join(repoRoot, "dist", "src", "cli.js");
 
 async function t3x(args: string[]): Promise<unknown> {
-  const { stdout } = await run("node", [cli, ...args], { cwd: repoRoot, maxBuffer: 8 * 1024 * 1024 });
+  const { stdout } = await run("node", [cli, ...args], {
+    cwd: repoRoot,
+    maxBuffer: 8 * 1024 * 1024,
+  });
   return JSON.parse(stdout) as unknown;
 }
 
@@ -80,13 +89,10 @@ test("CLI: profile, task, message, git and reconcile", async () => {
   ])) as { runId: string; events: Array<{ type: string }> };
   assert.ok(messaged.events.some((e) => e.type === "turn.terminal"));
 
-  const status = (await t3x([
-    "task",
-    "status",
-    created.task.taskId,
-    "--state-dir",
-    stateDir,
-  ])) as { task: { state: string }; pendingEffects: unknown[] };
+  const status = (await t3x(["task", "status", created.task.taskId, "--state-dir", stateDir])) as {
+    task: { state: string };
+    pendingEffects: unknown[];
+  };
   assert.equal(status.task.state, "ready");
   assert.equal(status.pendingEffects.length, 0);
 
@@ -101,13 +107,9 @@ test("CLI: profile, task, message, git and reconcile", async () => {
   assert.ok(reconciled.checked >= 1);
 
   // Stop / resume through the CLI keeps the same sandbox.
-  const stopped = (await t3x([
-    "task",
-    "stop",
-    created.task.taskId,
-    "--state-dir",
-    stateDir,
-  ])) as { ok: boolean };
+  const stopped = (await t3x(["task", "stop", created.task.taskId, "--state-dir", stateDir])) as {
+    ok: boolean;
+  };
   assert.equal(stopped.ok, true);
   await t3x(["task", "resume", created.task.taskId, "--state-dir", stateDir]);
   const afterResume = (await t3x([
@@ -167,9 +169,9 @@ test("HTTP API: create, message, approvals, event replay and remote git", async 
     };
     assert.ok(events.events.some((e) => e.type === "turn.terminal"));
     const cursor = events.lastSeq;
-    const tail = (await (
-      await fetch(`${base}/tasks/${taskId}/events?from=${cursor}`)
-    ).json()) as { events: unknown[] };
+    const tail = (await (await fetch(`${base}/tasks/${taskId}/events?from=${cursor}`)).json()) as {
+      events: unknown[];
+    };
     assert.equal(tail.events.length, 0);
 
     // Remote git inspection through the API.
@@ -210,16 +212,10 @@ test("HTTP API: create, message, approvals, event replay and remote git", async 
     await waitFor(() => server.tasks.getTask(taskId).state === "ready", 15_000, "turn end");
 
     // Lifecycle over HTTP.
-    assert.equal(
-      (await fetch(`${base}/tasks/${taskId}/stop`, { method: "POST" })).status,
-      202,
-    );
+    assert.equal((await fetch(`${base}/tasks/${taskId}/stop`, { method: "POST" })).status, 202);
     await server.effectWorker.drain();
     assert.equal(server.tasks.getTask(taskId).state, "suspended");
-    assert.equal(
-      (await fetch(`${base}/tasks/${taskId}/resume`, { method: "POST" })).status,
-      202,
-    );
+    assert.equal((await fetch(`${base}/tasks/${taskId}/resume`, { method: "POST" })).status, 202);
     await server.effectWorker.drain();
     await waitFor(() => server.registry.isConnected(taskId), 30_000, "worker");
     assert.equal(server.tasks.getTask(taskId).state, "ready");
@@ -227,7 +223,10 @@ test("HTTP API: create, message, approvals, event replay and remote git", async 
     // Unknown tasks are 404 with a typed error body.
     const missing = await fetch(`${base}/tasks/task_missing`);
     assert.equal(missing.status, 404);
-    assert.equal(((await missing.json()) as { error: { code: string } }).error.code, "task_not_found");
+    assert.equal(
+      ((await missing.json()) as { error: { code: string } }).error.code,
+      "task_not_found",
+    );
   } finally {
     await server.stop();
   }

@@ -434,10 +434,7 @@ export class WorkerTransport {
   // -- outbound ------------------------------------------------------------
 
   /** Emit a normalized provider event (or worker log) to the control plane. */
-  emit(
-    event: ProviderEventPayload,
-    correlation: { threadId?: string; runId?: string } = {},
-  ): void {
+  emit(event: ProviderEventPayload, correlation: { threadId?: string; runId?: string } = {}): void {
     this.state.seq += 1;
     const envelope = eventEnvelope(event, {
       taskId: this.taskFor(correlation),

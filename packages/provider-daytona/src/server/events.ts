@@ -117,7 +117,9 @@ export class ProviderEventMapper {
           status: "idle",
         };
         this.thread = thread;
-        return [{ type: "provider_thread.updated", driver: this.context.driver, providerThread: thread }];
+        return [
+          { type: "provider_thread.updated", driver: this.context.driver, providerThread: thread },
+        ];
       }
 
       case "turn.updated": {
@@ -143,9 +145,7 @@ export class ProviderEventMapper {
           completedAt: null,
         };
         this.turns.set(turn.id, turn);
-        return [
-          { type: "provider_turn.updated", driver: this.context.driver, providerTurn: turn },
-        ];
+        return [{ type: "provider_turn.updated", driver: this.context.driver, providerTurn: turn }];
       }
 
       case "message.updated": {
@@ -198,8 +198,7 @@ export class ProviderEventMapper {
         const reported = record(payload.runtimeRequest);
         const request: OrchestrationV2RuntimeRequest = {
           id: String(reported.requestId) as never,
-          nodeId:
-            this.turns.values().next().value?.nodeId ?? NodeId.make(`node_${event.seq}`),
+          nodeId: this.turns.values().next().value?.nodeId ?? NodeId.make(`node_${event.seq}`),
           providerTurnId: null,
           nativeRequestRef: null,
           kind: text(reported.kind) === "approval" ? "permission" : "user_input",

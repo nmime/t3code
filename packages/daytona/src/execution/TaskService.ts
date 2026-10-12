@@ -8,7 +8,11 @@
 
 import type { TaskRecord, GitStatus, WorkspaceEntry } from "../contracts/execution.js";
 import type { ProjectExecutionPolicy, SandboxScope } from "../contracts/sandboxScope.js";
-import { TaskNotFoundError, ExecutionError, CapabilityUnsupportedError } from "../contracts/errors.js";
+import {
+  TaskNotFoundError,
+  ExecutionError,
+  CapabilityUnsupportedError,
+} from "../contracts/errors.js";
 import { newEffectId, newRunId, newCommandId } from "../contracts/ids.js";
 import type { EventStore, StoredEvent } from "./EventStore.js";
 import type { SandboxControlPlane, CreateTaskInput } from "./SandboxControlPlane.js";
@@ -341,10 +345,14 @@ export class TaskService {
     const task = this.getTask(taskId);
     const active = this.activeRun(taskId);
     if (!active || task.state !== "running") {
-      throw new ExecutionError("task_state_invalid", `Task ${taskId} has no running turn to steer`, {
-        taskId,
-        state: task.state,
-      });
+      throw new ExecutionError(
+        "task_state_invalid",
+        `Task ${taskId} has no running turn to steer`,
+        {
+          taskId,
+          state: task.state,
+        },
+      );
     }
     const effectId = newEffectId();
     // A provider that cannot steer is refused now, not by a failed effect the

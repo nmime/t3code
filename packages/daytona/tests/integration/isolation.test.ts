@@ -119,17 +119,15 @@ test("scenario 10: tasks cannot see each other's files, credentials or RPC", asy
       socket.on("error", () => resolve());
       setTimeout(() => reject(new Error("no answer to the forged handshake")), 10_000);
     });
-    assert.ok(frames.some((f) => f.includes("unauthorized")), "forged credentials are rejected");
+    assert.ok(
+      frames.some((f) => f.includes("unauthorized")),
+      "forged credentials are rejected",
+    );
     assert.equal(server.registry.isConnected(taskB.taskId), true, "the real worker is untouched");
 
     // A command carrying a stale lease epoch is fenced.
     const stale = await server.registry
-      .sendCommand(
-        taskA.taskId,
-        "worker.ping",
-        { nonce: "n" },
-        { effectId: "fx_ping" },
-      )
+      .sendCommand(taskA.taskId, "worker.ping", { nonce: "n" }, { effectId: "fx_ping" })
       .catch(() => "refused");
     assert.notEqual(stale, undefined);
 

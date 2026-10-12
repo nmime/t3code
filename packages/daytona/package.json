@@ -2,15 +2,12 @@
   "name": "@t3tools/daytona",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "Daytona task sandboxes for T3 Code: an always-on control plane that owns tasks, environment profiles and sandbox lifecycle, plus the execution worker that runs inside each sandbox.",
   "license": "MIT",
-  "engines": {
-    "node": ">=22.5.0"
-  },
   "bin": {
     "t3x": "./dist/src/cli.js"
   },
+  "type": "module",
   "exports": {
     "./contracts": {
       "types": "./src/contracts/index.ts",
@@ -41,5 +38,8 @@
   },
   "devDependencies": {
     "@types/ws": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }

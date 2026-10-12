@@ -23,7 +23,7 @@ gets its own **git worktree** inside it; a task can opt out and run in a sandbox
 of its own (see [Sandbox scope](#sandbox-scope)).
 
 This repository implements the architecture described in the technical report
-*"T3 Code + VPS + Daytona task sandboxes"*, section by section.
+_"T3 Code + VPS + Daytona task sandboxes"_, section by section.
 
 ```
 Mac GUI / phone GUI / CLI
@@ -48,24 +48,24 @@ Mac GUI / phone GUI / CLI
 
 ## Design rules the code enforces
 
-| Rule (from the report) | Where |
-|---|---|
-| Execution target routing is separate from provider selection | `src/contracts/execution.ts`, `src/execution/ExecutionTargetResolver.ts` |
-| One sandbox per task; a task survives many turns and providers | `src/execution/SandboxControlPlane.ts` |
-| Scope is resolved once at task creation and never migrated later | `src/contracts/sandboxScope.ts`, `SandboxControlPlane.createTask` |
-| A shared sandbox is reused only for a compatible environment | `ProjectSandboxStore.findReusableSandbox`, `sandboxCompatibilityKey` |
-| Every task works in its own git worktree, never in the shared checkout | `SandboxControlPlane.assignWorkspace`, `WorkspaceRuntimeHost.worktree` |
-| A sandbox outlives its tasks only while something needs it (refcount) | `ProjectSandboxStore.attachTask/releaseTask`, `PolicyEngine.evaluateSandboxes` |
-| The control plane stops sandboxes explicitly; no provider idle timer | `PolicyEngine`, `POST /sandboxes/:id/stop` |
-| The worker dials **out**; no worker port is exposed | `src/execution/WorkerConnectionRegistry.ts`, `src/worker/WorkerTransport.ts` |
-| Commands are idempotent by `effectId`; a retried `turn.start` never runs twice | `src/worker/CommandDedupe.ts`, `src/execution/EffectWorker.ts` |
-| Worker leases with fencing epochs | `WorkerConnectionRegistry`, `WorkerTransport` |
-| No silent local fallback for files/git/checkpoints | `src/execution/RemoteWorkspaceService.ts` |
-| Policy enforcement cannot be overridden by project or task layers | `src/contracts/environmentProfile.ts` |
-| Resolved profile + digest pinned at task creation | `src/execution/EnvironmentProfileService.ts` |
-| Credentials are separate from configuration; never copied wholesale | `src/execution/SecretsBroker.ts` |
-| Resume (same sandbox) vs restore (recreated environment) are distinct | `SandboxControlPlane.resume/restore`, `TaskResumeKind` |
-| Cost controls: never auto-stop an executing task; delete only after retention | `src/execution/PolicyEngine.ts` |
+| Rule (from the report)                                                         | Where                                                                          |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| Execution target routing is separate from provider selection                   | `src/contracts/execution.ts`, `src/execution/ExecutionTargetResolver.ts`       |
+| One sandbox per task; a task survives many turns and providers                 | `src/execution/SandboxControlPlane.ts`                                         |
+| Scope is resolved once at task creation and never migrated later               | `src/contracts/sandboxScope.ts`, `SandboxControlPlane.createTask`              |
+| A shared sandbox is reused only for a compatible environment                   | `ProjectSandboxStore.findReusableSandbox`, `sandboxCompatibilityKey`           |
+| Every task works in its own git worktree, never in the shared checkout         | `SandboxControlPlane.assignWorkspace`, `WorkspaceRuntimeHost.worktree`         |
+| A sandbox outlives its tasks only while something needs it (refcount)          | `ProjectSandboxStore.attachTask/releaseTask`, `PolicyEngine.evaluateSandboxes` |
+| The control plane stops sandboxes explicitly; no provider idle timer           | `PolicyEngine`, `POST /sandboxes/:id/stop`                                     |
+| The worker dials **out**; no worker port is exposed                            | `src/execution/WorkerConnectionRegistry.ts`, `src/worker/WorkerTransport.ts`   |
+| Commands are idempotent by `effectId`; a retried `turn.start` never runs twice | `src/worker/CommandDedupe.ts`, `src/execution/EffectWorker.ts`                 |
+| Worker leases with fencing epochs                                              | `WorkerConnectionRegistry`, `WorkerTransport`                                  |
+| No silent local fallback for files/git/checkpoints                             | `src/execution/RemoteWorkspaceService.ts`                                      |
+| Policy enforcement cannot be overridden by project or task layers              | `src/contracts/environmentProfile.ts`                                          |
+| Resolved profile + digest pinned at task creation                              | `src/execution/EnvironmentProfileService.ts`                                   |
+| Credentials are separate from configuration; never copied wholesale            | `src/execution/SecretsBroker.ts`                                               |
+| Resume (same sandbox) vs restore (recreated environment) are distinct          | `SandboxControlPlane.resume/restore`, `TaskResumeKind`                         |
+| Cost controls: never auto-stop an executing task; delete only after retention  | `src/execution/PolicyEngine.ts`                                                |
 
 ## Quick start
 
@@ -210,18 +210,18 @@ npm run test:unit
 npm run test:integration
 ```
 
-| Report §9 scenario | Test |
-|---|---|
-| 1. Separate sandboxes per provider (Codex / Claude / OpenCode) | `tests/integration/lifecycle.test.ts` |
-| 2. Import reusable environment configuration | `tests/unit/controlPlane.test.ts`, `tests/integration/workspace.test.ts` |
-| 3. Mac → phone → Mac on the same conversation | `tests/integration/lifecycle.test.ts` |
-| 4. Interrupt, approve and resume remotely | `tests/integration/lifecycle.test.ts` |
-| 5. Diffs, git state and checkpoints bound to the correct sandbox | `tests/integration/workspace.test.ts` |
-| 6. Stop/restart a sandbox, continue the native session | `tests/integration/recovery.test.ts` |
-| 7. Kill the worker, reconnect without duplicating a turn | `tests/integration/recovery.test.ts` |
-| 8. Kill the control plane, recover and reconcile | `tests/integration/recovery.test.ts` |
-| 9. Duplicate commands, expired credentials, deleted sandboxes | `tests/unit/controlPlane.test.ts`, `tests/integration/recovery.test.ts` |
-| 10. Cross-task isolation (files, credentials, RPC) | `tests/integration/isolation.test.ts` |
+| Report §9 scenario                                                                                        | Test                                                                        |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1. Separate sandboxes per provider (Codex / Claude / OpenCode)                                            | `tests/integration/lifecycle.test.ts`                                       |
+| 2. Import reusable environment configuration                                                              | `tests/unit/controlPlane.test.ts`, `tests/integration/workspace.test.ts`    |
+| 3. Mac → phone → Mac on the same conversation                                                             | `tests/integration/lifecycle.test.ts`                                       |
+| 4. Interrupt, approve and resume remotely                                                                 | `tests/integration/lifecycle.test.ts`                                       |
+| 5. Diffs, git state and checkpoints bound to the correct sandbox                                          | `tests/integration/workspace.test.ts`                                       |
+| 6. Stop/restart a sandbox, continue the native session                                                    | `tests/integration/recovery.test.ts`                                        |
+| 7. Kill the worker, reconnect without duplicating a turn                                                  | `tests/integration/recovery.test.ts`                                        |
+| 8. Kill the control plane, recover and reconcile                                                          | `tests/integration/recovery.test.ts`                                        |
+| 9. Duplicate commands, expired credentials, deleted sandboxes                                             | `tests/unit/controlPlane.test.ts`, `tests/integration/recovery.test.ts`     |
+| 10. Cross-task isolation (files, credentials, RPC)                                                        | `tests/integration/isolation.test.ts`                                       |
 | 11. Sandbox scope: shared project sandbox, worktree per task, toggle, compatibility, refcounted lifecycle | `tests/integration/sandboxScope.test.ts`, `tests/unit/sandboxScope.test.ts` |
 
 Plus: the protocol and state machine (`tests/unit/protocol.test.ts`), profile

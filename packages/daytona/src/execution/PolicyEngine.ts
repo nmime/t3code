@@ -57,11 +57,7 @@ export class PolicyEngine {
 
   private evaluateTask(task: TaskRecord, now: number): PolicyDecision | null {
     // Active execution never auto-stops.
-    if (
-      task.state === "running" ||
-      task.state === "provisioning" ||
-      task.state === "restoring"
-    ) {
+    if (task.state === "running" || task.state === "provisioning" || task.state === "restoring") {
       return null;
     }
 

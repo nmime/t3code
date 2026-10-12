@@ -148,10 +148,16 @@ export const makeAdapter = (
                 continue;
               }
               for (const task of watched) {
-                for await (const event of client.events(task.taskId, cursor, streamController.signal)) {
+                for await (const event of client.events(
+                  task.taskId,
+                  cursor,
+                  streamController.signal,
+                )) {
                   cursor = Math.max(cursor, event.seq);
                   if (event.type === "turn.updated") {
-                    const payload = event.payload.providerTurn as { runId?: string; providerTurnId?: string } | undefined;
+                    const payload = event.payload.providerTurn as
+                      | { runId?: string; providerTurnId?: string }
+                      | undefined;
                     if (payload?.runId && payload.providerTurnId) {
                       turnsByRun.set(payload.runId, payload.providerTurnId);
                     }
@@ -206,7 +212,10 @@ export const makeAdapter = (
               );
               tasks.set(ensureInput.threadId as unknown as string, task);
               const snapshot = await snapshotOf(task.taskId);
-              return threadFromSnapshot(mapperContext(mapper, cwd, capabilities, options, input), snapshot);
+              return threadFromSnapshot(
+                mapperContext(mapper, cwd, capabilities, options, input),
+                snapshot,
+              );
             },
             catch: (cause) =>
               new ProviderAdapter.ProviderAdapterEnsureThreadError({
@@ -247,7 +256,11 @@ export const makeAdapter = (
                 task = await ensureTask(threadId, turnInput.modelSelection);
                 tasks.set(threadId, task);
               }
-              await client.sendMessage(task.taskId, turnInput.message.text, turnInput.modelSelection.model);
+              await client.sendMessage(
+                task.taskId,
+                turnInput.message.text,
+                turnInput.modelSelection.model,
+              );
             },
             catch: (cause) =>
               new ProviderAdapter.ProviderAdapterTurnStartError({

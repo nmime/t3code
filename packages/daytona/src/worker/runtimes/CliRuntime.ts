@@ -112,7 +112,8 @@ export class CliRuntime implements WorkerProviderRuntime {
 
   async startTurn(payload: TurnStartPayload): Promise<void> {
     const thread = this.threads.get(payload.threadId);
-    if (!thread) throw new ExecutionError("task_not_found", `thread ${payload.threadId} not ensured`);
+    if (!thread)
+      throw new ExecutionError("task_not_found", `thread ${payload.threadId} not ensured`);
 
     const providerTurnId = `${this.driver}_turn_${payload.runId}`;
     this.emit({

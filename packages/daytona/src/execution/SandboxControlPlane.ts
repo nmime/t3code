@@ -42,11 +42,7 @@ import {
 } from "../contracts/sandboxScope.js";
 import type { SandboxBackend, SandboxSpec } from "./daytona/SandboxBackend.js";
 import { LocalBackend } from "./daytona/LocalBackend.js";
-import {
-  ExecutionError,
-  WorkerUnavailableError,
-  TaskNotFoundError,
-} from "../contracts/errors.js";
+import { ExecutionError, WorkerUnavailableError, TaskNotFoundError } from "../contracts/errors.js";
 import { newTaskId, newThreadId, newTokenId, sha256Hex, newEffectId } from "../contracts/ids.js";
 import type { EventStore } from "./EventStore.js";
 import type { ProjectSandboxStore } from "./ProjectSandboxStore.js";
@@ -348,7 +344,10 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   private async provisionProjectSandbox(
     task: TaskRecord,
     spec: SandboxSpec,
-    resolvedSources: { files: Array<{ path: string; content: string; mode?: number }>; warnings: string[] },
+    resolvedSources: {
+      files: Array<{ path: string; content: string; mode?: number }>;
+      warnings: string[];
+    },
     secretNames: string[],
   ): Promise<void> {
     const project =
@@ -401,24 +400,23 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     // environment rather than being dropped into an incompatible one.
     const otherEnvironments = this.projects
       .listProjectSandboxes(project.projectId)
-      .filter((sandbox) => sandbox.state !== "deleted" && sandbox.compatibilityKey !== compatibilityKey);
+      .filter(
+        (sandbox) => sandbox.state !== "deleted" && sandbox.compatibilityKey !== compatibilityKey,
+      );
 
-    await this.createSandbox(
-      task,
-      spec,
-      resolvedSources,
-      secretNames,
-      {
-        projectId: project.projectId,
-        compatibilityKey,
-        shared: true,
-        reason: otherEnvironments.length > 0 ? "incompatible_environment" : "shared_project_sandbox",
-      },
-    );
+    await this.createSandbox(task, spec, resolvedSources, secretNames, {
+      projectId: project.projectId,
+      compatibilityKey,
+      shared: true,
+      reason: otherEnvironments.length > 0 ? "incompatible_environment" : "shared_project_sandbox",
+    });
   }
 
   /** Attach a task to an existing, compatible project sandbox. */
-  private async reuseProjectSandbox(task: TaskRecord, sandbox: ProjectSandboxRecord): Promise<void> {
+  private async reuseProjectSandbox(
+    task: TaskRecord,
+    sandbox: ProjectSandboxRecord,
+  ): Promise<void> {
     this.store.updateTask(task.taskId, {
       sandboxId: sandbox.sandboxId,
       workspaceRoot: sandbox.workspaceRoot,
@@ -443,7 +441,10 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     ]);
     // Worktrees of long-dead tasks are pruned before a new one is added.
     await this.backend
-      .exec(sandbox.sandboxId, "git worktree prune", { cwd: sandbox.workspaceRoot, timeoutMs: 30_000 })
+      .exec(sandbox.sandboxId, "git worktree prune", {
+        cwd: sandbox.workspaceRoot,
+        timeoutMs: 30_000,
+      })
       .catch(() => undefined);
     await this.assignWorkspace(task, sandbox.sandboxId, true);
     this.projects.attachTask({
@@ -464,7 +465,10 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   private async provisionDedicatedSandbox(
     task: TaskRecord,
     spec: SandboxSpec,
-    resolvedSources: { files: Array<{ path: string; content: string; mode?: number }>; warnings: string[] },
+    resolvedSources: {
+      files: Array<{ path: string; content: string; mode?: number }>;
+      warnings: string[];
+    },
     secretNames: string[],
     forcedBy: SandboxScopeReason | null,
   ): Promise<void> {
@@ -479,27 +483,24 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
         },
       ]);
     }
-    await this.createSandbox(
-      task,
-      spec,
-      resolvedSources,
-      secretNames,
-      {
-        // A task that opted out (or was pushed out) of its project sandbox still
-        // belongs to its project: the sandbox is dedicated, not anonymous.
-        projectId: task.projectId ?? null,
-        compatibilityKey: null,
-        shared: false,
-        reason: forcedBy ?? "task_override",
-      },
-    );
+    await this.createSandbox(task, spec, resolvedSources, secretNames, {
+      // A task that opted out (or was pushed out) of its project sandbox still
+      // belongs to its project: the sandbox is dedicated, not anonymous.
+      projectId: task.projectId ?? null,
+      compatibilityKey: null,
+      shared: false,
+      reason: forcedBy ?? "task_override",
+    });
   }
 
   /** Create the sandbox, clone the repository, assign the workspace and attach. */
   private async createSandbox(
     task: TaskRecord,
     spec: SandboxSpec,
-    resolvedSources: { files: Array<{ path: string; content: string; mode?: number }>; warnings: string[] },
+    resolvedSources: {
+      files: Array<{ path: string; content: string; mode?: number }>;
+      warnings: string[];
+    },
     secretNames: string[],
     options: {
       projectId: string | null;
@@ -716,7 +717,8 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   /** Start (or reuse) the single worker that serves a sandbox's tasks. */
   private async ensureSandboxWorker(sandboxId: string): Promise<void> {
     const bindings = this.projects.listBindings(sandboxId);
-    const primary = bindings[0]?.taskId ?? this.store.listTasks().find((t) => t.sandboxId === sandboxId)?.taskId;
+    const primary =
+      bindings[0]?.taskId ?? this.store.listTasks().find((t) => t.sandboxId === sandboxId)?.taskId;
     if (!primary) {
       throw new WorkerUnavailableError(sandboxId, "no task is bound to this sandbox");
     }
@@ -888,7 +890,10 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     });
     this.states().transition(taskId, "completed", { reason: "destroyed" });
     this.store.appendEvents(taskId, "task", [
-      { type: "task.sandbox_destroyed", payload: { taskId, sandboxId, scope: binding?.scope ?? "task" } },
+      {
+        type: "task.sandbox_destroyed",
+        payload: { taskId, sandboxId, scope: binding?.scope ?? "task" },
+      },
     ]);
   }
 

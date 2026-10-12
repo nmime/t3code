@@ -263,9 +263,7 @@ async function task(args: string[]): Promise<void> {
           const status = server.tasks.status(taskId) as { task: { state: string } };
           return status.task.state !== "running";
         }, 60_000);
-        console.log(
-          JSON.stringify({ ...result, events: server.tasks.events(taskId) }, null, 2),
-        );
+        console.log(JSON.stringify({ ...result, events: server.tasks.events(taskId) }, null, 2));
         return;
       }
       case "approve": {

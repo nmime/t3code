@@ -2,9 +2,9 @@
   "name": "@t3tools/provider-daytona",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "Provider driver that runs a thread's agent inside a Daytona task sandbox, through a @t3tools/daytona control plane.",
   "license": "MIT",
+  "type": "module",
   "exports": {
     "./server": {
       "types": "./src/server.ts",

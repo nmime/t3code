@@ -147,11 +147,10 @@ export class WorkspaceRuntimeHost {
         return { output: truncate(result.stdout) };
       }
       case "log": {
-        const result = await run(
-          "git",
-          ["log", "--oneline", "-n", "20", ...(payload.args ?? [])],
-          { cwd, timeoutMs: 60_000 },
-        );
+        const result = await run("git", ["log", "--oneline", "-n", "20", ...(payload.args ?? [])], {
+          cwd,
+          timeoutMs: 60_000,
+        });
         return { output: truncate(result.stdout) };
       }
       case "branch": {
@@ -224,10 +223,12 @@ export class WorkspaceRuntimeHost {
         }
         const branch =
           payload.branch ??
-          (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-            cwd: target,
-            timeoutMs: 60_000,
-          })).stdout.trim();
+          (
+            await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+              cwd: target,
+              timeoutMs: 60_000,
+            })
+          ).stdout.trim();
         return { path: target, branch, created: true };
       }
       case "remove": {
@@ -344,9 +345,7 @@ export class WorkspaceRuntimeHost {
         .filter(Boolean)
         // `%(refname:short)` drops the leading `refs/`, so strip either form.
         .map((ref) =>
-          ref
-            .replace(/^refs\/t3x\/checkpoints\//, "")
-            .replace(/^t3x\/checkpoints\//, ""),
+          ref.replace(/^refs\/t3x\/checkpoints\//, "").replace(/^t3x\/checkpoints\//, ""),
         ),
     };
   }

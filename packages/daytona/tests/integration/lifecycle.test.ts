@@ -27,7 +27,7 @@ import {
 test("scenario 1: separate sandboxes for different providers", async () => {
   const stateDir = tempStateDir();
   const binDir = fakeAgentBinDir(
-    ['#!/usr/bin/env bash', 'echo "codex agent running in $PWD"', "echo done"].join("\n"),
+    ["#!/usr/bin/env bash", 'echo "codex agent running in $PWD"', "echo done"].join("\n"),
   );
   const originalPath = process.env.PATH;
   process.env.PATH = `${binDir}:${originalPath}`;
@@ -65,8 +65,7 @@ test("scenario 1: separate sandboxes for different providers", async () => {
     assert.ok(
       codexEvents.some(
         (e) =>
-          e.type === "message.updated" &&
-          JSON.stringify(e.payload).includes("codex agent running"),
+          e.type === "message.updated" && JSON.stringify(e.payload).includes("codex agent running"),
       ),
       "CLI output is normalized into provider events",
     );
@@ -97,7 +96,10 @@ test("scenario 3: Mac disconnects, phone continues, Mac reconnects", async () =>
     await sendMessage(server, task.taskId, "second turn from the phone");
     const phoneEvents = server.tasks.events(task.taskId, macCursor);
     assert.ok(phoneEvents.length > 0);
-    assert.ok(phoneEvents.every((e) => e.seq > macCursor), "replay is strictly after the cursor");
+    assert.ok(
+      phoneEvents.every((e) => e.seq > macCursor),
+      "replay is strictly after the cursor",
+    );
     assert.ok(
       phoneEvents.some((e) => JSON.stringify(e.payload).includes("second turn from the phone")),
     );
@@ -105,7 +107,11 @@ test("scenario 3: Mac disconnects, phone continues, Mac reconnects", async () =>
     // The Mac reconnects and replays from its own cursor without duplicates.
     const replay = server.tasks.events(task.taskId, 0);
     const seqs = replay.map((e) => e.seq);
-    assert.deepEqual(seqs, [...new Set(seqs)].sort((a, b) => a - b), "event sequence is monotonic");
+    assert.deepEqual(
+      seqs,
+      [...new Set(seqs)].sort((a, b) => a - b),
+      "event sequence is monotonic",
+    );
     assert.equal(replay.at(-1)!.seq, server.tasks.getTask(task.taskId).lastEventSequence);
 
     // The task survived the client disconnect: same sandbox, same session.
@@ -175,9 +181,8 @@ test("unsupported provider capabilities are refused, not faked", async () => {
   const server = await startTestServer({ stateDir });
   try {
     const task = await createTask(server, { provider: "claude" });
-    const { RemoteProviderAdapter } = await import(
-      "../../src/orchestration-v2/RemoteProviderAdapter.js"
-    );
+    const { RemoteProviderAdapter } =
+      await import("../../src/orchestration-v2/RemoteProviderAdapter.js");
     const adapter = new RemoteProviderAdapter({
       driver: "claude",
       taskId: task.taskId,

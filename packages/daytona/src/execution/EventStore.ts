@@ -12,11 +12,7 @@
  * safe because commands are idempotent by `effectId` on the worker.
  */
 
-import type {
-  TaskRecord,
-  TaskExecutionState,
-  TaskResumeKind,
-} from "../contracts/execution.js";
+import type { TaskRecord, TaskExecutionState, TaskResumeKind } from "../contracts/execution.js";
 import type { SandboxScope } from "../contracts/sandboxScope.js";
 import type { ResolvedProfile } from "../contracts/environmentProfile.js";
 import { IdempotencyConflictError, ExecutionError } from "../contracts/errors.js";
@@ -353,7 +349,9 @@ export class EventStore {
     const now = Date.now();
     if (retryInMs === null) {
       this.db.handle
-        .prepare(`UPDATE effects SET status = 'failed', error = ?, updated_at = ? WHERE effect_id = ?`)
+        .prepare(
+          `UPDATE effects SET status = 'failed', error = ?, updated_at = ? WHERE effect_id = ?`,
+        )
         .run(JSON.stringify(error ?? null), now, effectId);
       return;
     }
@@ -486,9 +484,9 @@ export class EventStore {
   }
 
   getTask(taskId: string): TaskRecord | null {
-    const row = this.db.handle
-      .prepare(`SELECT * FROM tasks WHERE task_id = ?`)
-      .get(taskId) as Record<string, unknown> | undefined;
+    const row = this.db.handle.prepare(`SELECT * FROM tasks WHERE task_id = ?`).get(taskId) as
+      | Record<string, unknown>
+      | undefined;
     return row ? this.rowToTask(row) : null;
   }
 
@@ -743,9 +741,9 @@ export class EventStore {
     tag: string;
     policy: unknown;
   } | null {
-    const row = this.db.handle
-      .prepare(`SELECT * FROM secrets WHERE name = ?`)
-      .get(name) as Record<string, unknown> | undefined;
+    const row = this.db.handle.prepare(`SELECT * FROM secrets WHERE name = ?`).get(name) as
+      | Record<string, unknown>
+      | undefined;
     if (!row) return null;
     return {
       ciphertext: String(row.ciphertext),

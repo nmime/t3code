@@ -125,10 +125,7 @@ export class ProviderRuntimeHost {
     }));
   }
 
-  requireCapability(
-    driver: string,
-    capability: keyof ProviderCapabilities,
-  ): WorkerProviderRuntime {
+  requireCapability(driver: string, capability: keyof ProviderCapabilities): WorkerProviderRuntime {
     const runtime = this.get(driver);
     if (!runtime.capabilities()[capability]) {
       throw new CapabilityUnsupportedError(driver, capability);

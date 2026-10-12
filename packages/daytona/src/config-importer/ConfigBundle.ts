@@ -54,9 +54,7 @@ export class ConfigBundleStore {
       .readdirSync(this.root)
       .filter((f) => f.endsWith(".json"))
       .map((f) => {
-        const bundle = JSON.parse(
-          fs.readFileSync(path.join(this.root, f), "utf8"),
-        ) as ConfigBundle;
+        const bundle = JSON.parse(fs.readFileSync(path.join(this.root, f), "utf8")) as ConfigBundle;
         return { name: bundle.name, version: bundle.version, files: bundle.files.length };
       });
   }

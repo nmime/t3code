@@ -30,11 +30,7 @@ export class ExecutionError extends Error {
   readonly code: ExecutionErrorCode;
   readonly details: Record<string, unknown>;
 
-  constructor(
-    code: ExecutionErrorCode,
-    message: string,
-    details: Record<string, unknown> = {},
-  ) {
+  constructor(code: ExecutionErrorCode, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = "ExecutionError";
     this.code = code;

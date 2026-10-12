@@ -96,10 +96,10 @@ export class SecretsBroker {
     for (const ref of refs) {
       const row = this.store.getSecretCipher(ref.secretRef);
       if (!row) {
-        throw new SecretPolicyViolationError(
-          `profile references unknown secret ${ref.secretRef}`,
-          { secretRef: ref.secretRef, profileId },
-        );
+        throw new SecretPolicyViolationError(`profile references unknown secret ${ref.secretRef}`, {
+          secretRef: ref.secretRef,
+          profileId,
+        });
       }
       const policy = (row.policy ?? DEFAULT_SECRET_POLICY) as SecretPolicy;
       if (ref.inject === "env" && !policy.envInjectable) {
@@ -134,10 +134,7 @@ export class SecretsBroker {
     for (const value of this.knownValues) {
       if (value.length >= 6) out = out.split(value).join("***");
     }
-    return out.replace(
-      /\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{8,})\b/g,
-      "***",
-    );
+    return out.replace(/\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{8,})\b/g, "***");
   }
 }
 

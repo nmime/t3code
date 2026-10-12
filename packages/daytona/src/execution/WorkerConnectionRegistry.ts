@@ -117,7 +117,9 @@ export class WorkerConnectionRegistry {
 
   /** Sandbox a task's commands must be routed to. */
   sandboxForTask(taskId: string): string | null {
-    return this.options.projects?.sandboxForTask(taskId) ?? this.store.getTask(taskId)?.sandboxId ?? null;
+    return (
+      this.options.projects?.sandboxForTask(taskId) ?? this.store.getTask(taskId)?.sandboxId ?? null
+    );
   }
 
   isConnected(taskId: string): boolean {
@@ -345,16 +347,10 @@ export class WorkerConnectionRegistry {
 
     const consumed = this.store.consumeWorkerToken(tokenId, sha256Hex(secret));
     if (!consumed) {
-      throw new ExecutionError(
-        "unauthorized",
-        "worker token is invalid, expired or already used",
-      );
+      throw new ExecutionError("unauthorized", "worker token is invalid, expired or already used");
     }
     if (consumed.sandboxId !== frame.sandboxId) {
-      throw new ExecutionError(
-        "unauthorized",
-        "worker token does not match the sandbox it claims",
-      );
+      throw new ExecutionError("unauthorized", "worker token does not match the sandbox it claims");
     }
 
     // A token is minted for one task bound to the sandbox; the worker may

@@ -303,10 +303,9 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfile {
         const agents = value as { allowed?: string[]; defaults?: Record<string, unknown> };
         for (const a of agents.allowed ?? []) allowedAgents.add(a);
         if (agents.defaults) {
-          scalarPatch.agents = deepMerge(
-            (merged.agents as Record<string, unknown>) ?? {},
-            { defaults: agents.defaults },
-          );
+          scalarPatch.agents = deepMerge((merged.agents as Record<string, unknown>) ?? {}, {
+            defaults: agents.defaults,
+          });
         }
         continue;
       }
@@ -328,9 +327,7 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfile {
   // ---- Policy enforcement (cannot be overridden) -------------------------
 
   if (repositoryConstraints && policy.allowedRepositories) {
-    const allowed = repositoryConstraints.filter((r) =>
-      policy.allowedRepositories!.includes(r),
-    );
+    const allowed = repositoryConstraints.filter((r) => policy.allowedRepositories!.includes(r));
     if (allowed.length !== repositoryConstraints.length) {
       warnings.push("policy.allowedRepositories removed project repository constraints");
     }
@@ -412,10 +409,9 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfile {
   }
   candidate.sandbox = sandbox;
 
-  const defaults = ((candidate.agents as Record<string, unknown>)?.defaults as Record<
-    string,
-    unknown
-  >)?.permissionMode;
+  const defaults = (
+    (candidate.agents as Record<string, unknown>)?.defaults as Record<string, unknown>
+  )?.permissionMode;
   if (policy.requireSupervised && defaults === "auto") {
     warnings.push("policy.requireSupervised forced permissionMode to supervised");
     candidate.agents = deepMerge((candidate.agents as Record<string, unknown>) ?? {}, {

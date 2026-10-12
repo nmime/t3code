@@ -62,10 +62,7 @@ test("resolution order: task request, then project default, then global default"
 
   // A profile that asks for per-task isolation changes the global default.
   const perTask = profile({ sandbox: { isolation: "per-task" } });
-  assert.equal(
-    resolveSandboxScope({ profile: perTask, repositoryUrl: repo }).scope,
-    "task",
-  );
+  assert.equal(resolveSandboxScope({ profile: perTask, repositoryUrl: repo }).scope, "task");
 
   // The project default sits above the global default.
   const projectDefaultTask = resolveSandboxScope({
@@ -131,7 +128,9 @@ test("compatibility key covers repository, profile, snapshot and credential doma
   // Different snapshot/OS requirement: not shareable.
   assert.notEqual(
     sandboxCompatibilityKey({
-      profile: profile({ runtime: { snapshot: "node24-dev-v4", resources: { cpu: 2, memoryGiB: 4 } } }),
+      profile: profile({
+        runtime: { snapshot: "node24-dev-v4", resources: { cpu: 2, memoryGiB: 4 } },
+      }),
       repositoryUrl: repo,
     }),
     key,

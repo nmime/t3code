@@ -214,7 +214,11 @@ export class HttpApi {
           });
         }
         if (rest === "/exec" && method === "POST") {
-          return send(res, 200, await this.deps.tasks.execute(taskId, String(body.command ?? "true")));
+          return send(
+            res,
+            200,
+            await this.deps.tasks.execute(taskId, String(body.command ?? "true")),
+          );
         }
         if (rest === "/files" && method === "GET") {
           return send(res, 200, {
