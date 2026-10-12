@@ -241,6 +241,28 @@ export class HttpApi {
         }
       }
 
+      // Text generation: one prompt, no conversation. Keyed by the sandbox
+      // workspace the caller is asking about, so it lands in the task that
+      // owns those files.
+      if (path === "/text-generation" && method === "POST") {
+        const cwd = String(body.cwd ?? "").trim();
+        const prompt = String(body.prompt ?? "");
+        if (!cwd || !prompt) {
+          throw new ExecutionError(
+            "protocol_violation",
+            "POST /text-generation needs `cwd` and `prompt`",
+            {},
+          );
+        }
+        return send(res, 200, {
+          ...(await this.deps.tasks.generateText({
+            cwd,
+            prompt,
+            ...(body.model ? { model: String(body.model) } : {}),
+          })),
+        });
+      }
+
       if (path === "/reconcile" && method === "POST") {
         return send(res, 200, await this.deps.controlPlane.reconcile());
       }

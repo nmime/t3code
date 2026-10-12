@@ -384,3 +384,46 @@ test("a thread that already has a task is refused, not duplicated", async () => 
     },
   );
 });
+
+test("text generation answers a prompt in the sandbox without touching the conversation", async () => {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "t3x-gen-origin-"));
+  const run = (command: string) =>
+    spawnSync("bash", ["-c", command], { cwd: origin, encoding: "utf8" });
+  run("git init -q -b main");
+  run("git config user.email a@b.c");
+  run("git config user.name t");
+  fs.writeFileSync(path.join(origin, "README.md"), "# generate\n");
+  run("git add -A && git commit -qm init");
+
+  const task = await client.createTask({
+    profileId: "provider-test",
+    provider: "echo",
+    repositoryUrl: origin,
+  });
+  await server.effectWorker.drain();
+  await waitFor(() => server.registry.isConnected(task.taskId), 30_000, "worker attach");
+  await waitFor(() => server.tasks.getTask(task.taskId).state === "ready", 15_000, "ready");
+
+  const status = await client.status(task.taskId);
+  const text = await client.generateText({
+    cwd: status.worktreePath,
+    prompt: "Write a commit message for these changes.",
+  });
+  assert.match(text, /echo subject/, "the agent answered");
+  assert.match(text, /Write a commit message/, "with the prompt that travelled to it");
+
+  // Generation is not a turn: the conversation the thread sees is untouched.
+  const snapshot = await client.snapshot(task.taskId);
+  assert.equal(snapshot.messages.length, 0);
+  assert.equal(snapshot.turns.length, 0);
+
+  // A workspace no task owns is refused rather than guessed at.
+  await assert.rejects(
+    () => client.generateText({ cwd: "/workspace/nowhere", prompt: "hello" }),
+    (error: Error) => {
+      assert.ok(error instanceof DaytonaControlPlaneError);
+      assert.equal(error.code, "task_not_found");
+      return true;
+    },
+  );
+});

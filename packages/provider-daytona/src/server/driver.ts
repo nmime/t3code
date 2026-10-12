@@ -41,6 +41,12 @@ import {
   type ProviderSnapshotSettings,
 } from "@t3tools/provider-core/server/snapshotSettings";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
+import {
+  decodeJsonReply,
+  fromRunner,
+  withoutInvestigation,
+  type Runner,
+} from "@t3tools/provider-core/server/textGenerationOperations";
 
 import { DaytonaSettings } from "../settings.ts";
 import { makeAdapter } from "./adapter.ts";
@@ -69,27 +75,36 @@ export const DaytonaAdapterV2Driver: ProviderAdapterDriver<DaytonaProviderConfig
 };
 
 /**
- * The sandbox runs the agent, so nothing here generates application text: a
- * commit message or a thread title would have to come from a model inside the
- * sandbox, which this integration does not do yet. T3 is told the operation is
- * unsupported rather than that a model failed.
+ * Text generation runs in the sandbox: the prompt T3 builds is handed to the
+ * agent there, one-shot, and its reply is decoded against the operation's own
+ * schema. That is the only place the agent exists, and the only place the
+ * checkout a prompt may need to read is.
+ *
+ * The one operation that needs read-only tools — the review guide, which
+ * investigates a checkout over as many turns as it needs — is refused rather
+ * than answered blind: a one-shot invocation has no read-only tool mode to
+ * promise, and `withoutInvestigation` says exactly that.
  */
-const makeUnsupportedTextGeneration = (): ProviderTextGeneration => {
-  const unsupported = (operation: string) =>
-    Effect.fail(
-      new TextGenerationError({
-        operation,
-        detail:
-          "Daytona instances run the agent inside a sandbox and do not provide application text generation.",
-      }),
-    );
-  return {
-    generateCommitMessage: () => unsupported("generateCommitMessage"),
-    generatePrContent: () => unsupported("generatePrContent"),
-    generateBranchName: () => unsupported("generateBranchName"),
-    generateThreadTitle: () => unsupported("generateThreadTitle"),
-    generateReviewGuide: () => unsupported("generateReviewGuide"),
-  };
+const makeSandboxTextGeneration = (client: DaytonaControlPlane): ProviderTextGeneration => {
+  const run: Runner = (request) =>
+    Effect.gen(function* () {
+      const text = yield* Effect.tryPromise({
+        try: () =>
+          client.generateText({
+            cwd: request.cwd,
+            prompt: request.prompt,
+            ...(request.modelSelection.model ? { model: request.modelSelection.model } : {}),
+          }),
+        catch: (cause) =>
+          new TextGenerationError({
+            operation: request.operation,
+            detail: "The sandbox could not answer the generation prompt.",
+            cause: cause instanceof Error ? cause : new Error(String(cause)),
+          }),
+      });
+      return yield* decodeJsonReply(request, "Daytona", text);
+    });
+  return fromRunner("Daytona", withoutInvestigation("Daytona", run));
 };
 
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
@@ -232,6 +247,12 @@ export const DaytonaDriver: ProviderDriver<DaytonaSettings, DaytonaDriverEnv> = 
           continuation: { groupKey: continuationIdentity.continuationKey },
         })),
       );
+      const textGeneration = makeSandboxTextGeneration(
+        new DaytonaControlPlane({
+          url: normalizeControlPlaneUrl(effectiveConfig.controlPlaneUrl),
+          ...(effectiveConfig.apiToken ? { token: effectiveConfig.apiToken } : {}),
+        }),
+      );
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DaytonaSettings>>({
         resolveMaintenance: () => Effect.succeed(MAINTENANCE),
@@ -261,7 +282,7 @@ export const DaytonaDriver: ProviderDriver<DaytonaSettings, DaytonaDriverEnv> = 
         enabled,
         snapshot,
         orchestrationAdapter,
-        textGeneration: makeUnsupportedTextGeneration(),
+        textGeneration,
       } satisfies ProviderInstance;
     }),
 };

@@ -66,6 +66,66 @@ export class TaskService {
     return this.store.listTasks();
   }
 
+  /**
+   * Answer one prompt in a task's sandbox, with no conversation attached.
+   *
+   * `cwd` is the caller's: T3 asks for a commit message for the checkout its
+   * thread is working in, and for a sandbox provider that path is inside the
+   * sandbox, so the task is the one whose worktree it is. The agent runs in
+   * that worktree, not in the caller's copy of the path.
+   *
+   * Nothing is written to the task's event log: a generated commit message is
+   * not a turn, and must not appear as one in the thread that asked for it.
+   */
+  async generateText(input: {
+    cwd: string;
+    prompt: string;
+    model?: string;
+  }): Promise<{ text: string }> {
+    const task = this.taskForCwd(input.cwd);
+    await this.controlPlane.ensureReady(task.taskId);
+    const reply = await this.registry.sendCommand(
+      task.taskId,
+      "text.generate",
+      {
+        driver: task.provider,
+        cwd: task.worktreePath || task.workspaceRoot,
+        prompt: input.prompt,
+        ...(input.model ? { model: input.model } : {}),
+      },
+      { effectId: newEffectId(), timeoutMs: 15 * 60_000 },
+    );
+    const text = (reply as { text?: unknown } | null)?.text;
+    if (typeof text !== "string") {
+      throw new ExecutionError(
+        "protocol_violation",
+        "the worker did not answer the generation prompt",
+        { taskId: task.taskId },
+      );
+    }
+    return { text };
+  }
+
+  /**
+   * The task whose worktree is `cwd`, or — when the caller names the shared
+   * base checkout, which several tasks of one project share — the one that was
+   * worked in most recently.
+   */
+  private taskForCwd(cwd: string): TaskRecord {
+    const wanted = cwd.replace(/\/+$/, "");
+    const tasks = this.store.listTasks();
+    const exact = tasks.find((candidate) => candidate.worktreePath.replace(/\/+$/, "") === wanted);
+    if (exact) return exact;
+    const shared = tasks
+      .filter((candidate) => candidate.workspaceRoot.replace(/\/+$/, "") === wanted)
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+    const task = shared[0];
+    if (!task) {
+      throw new ExecutionError("task_not_found", `no sandbox workspace is ${cwd}`, { cwd });
+    }
+    return task;
+  }
+
   /** Status view for clients: binding, sandbox, connection, approvals, effects. */
   status(taskId: string): Record<string, unknown> {
     const task = this.getTask(taskId);

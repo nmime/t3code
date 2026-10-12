@@ -29,6 +29,7 @@ import type {
   TurnSteerPayload,
   RuntimeRequestRespondPayload,
   ThreadRollbackPayload,
+  TextGeneratePayload,
   ThreadForkPayload,
 } from "../contracts/workerProtocol.js";
 import { CapabilityUnsupportedError, ExecutionError } from "../contracts/errors.js";
@@ -51,6 +52,11 @@ export interface WorkerProviderRuntime {
   respondRuntimeRequest(payload: RuntimeRequestRespondPayload): Promise<void>;
   rollbackThread(payload: ThreadRollbackPayload): Promise<void>;
   forkThread(payload: ThreadForkPayload): Promise<void>;
+  /**
+   * Answer one prompt with no conversation attached. A runtime whose agent CLI
+   * cannot be driven one-shot refuses rather than guessing.
+   */
+  textGenerate(payload: TextGeneratePayload): Promise<{ text: string }>;
   /** Persisted native session state, used for restore-vs-resume semantics. */
   stateSnapshot(): unknown;
   restoreState(snapshot: unknown): void;

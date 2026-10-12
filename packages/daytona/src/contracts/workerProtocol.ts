@@ -152,6 +152,21 @@ export interface ThreadForkPayload {
   providerThreadId: string;
 }
 
+/**
+ * One prompt for the agent to answer, with no thread and no conversation: the
+ * sandbox-side half of T3's text generation (commit messages, titles, branch
+ * names). Nothing is written to a task's event log, so a generated commit
+ * message never appears as a turn in the thread that asked for it.
+ */
+export interface TextGeneratePayload {
+  /** The provider runtime in the sandbox that answers. */
+  driver: string;
+  /** Where the agent runs. The control plane resolves the task's worktree. */
+  cwd?: string;
+  prompt: string;
+  model?: string;
+}
+
 export interface CheckpointCapturePayload {
   checkpointId: string;
   label?: string;
@@ -231,6 +246,7 @@ export type CommandPayloadMap = {
   "runtime_request.respond": RuntimeRequestRespondPayload;
   "thread.rollback": ThreadRollbackPayload;
   "thread.fork": ThreadForkPayload;
+  "text.generate": TextGeneratePayload;
   "checkpoint.capture": CheckpointCapturePayload;
   "checkpoint.restore": CheckpointRestorePayload;
   "checkpoint.diff": CheckpointDiffPayload;
@@ -257,6 +273,7 @@ export const COMMAND_TYPES = [
   "runtime_request.respond",
   "thread.rollback",
   "thread.fork",
+  "text.generate",
   "checkpoint.capture",
   "checkpoint.restore",
   "checkpoint.diff",

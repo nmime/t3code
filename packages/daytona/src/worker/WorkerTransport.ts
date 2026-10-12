@@ -403,6 +403,8 @@ export class WorkerTransport {
         return void (await this.providers.get(driver).rollbackThread(payload));
       case "thread.fork":
         return void (await this.providers.get(driver).forkThread(payload));
+      case "text.generate":
+        return await this.providers.get(driver).textGenerate(payload);
       case "workspace.exec":
         return await this.workspace.exec(payload);
       case "workspace.read":

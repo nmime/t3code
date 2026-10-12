@@ -28,6 +28,7 @@ import type {
   TurnSteerPayload,
   RuntimeRequestRespondPayload,
   ThreadRollbackPayload,
+  TextGeneratePayload,
   ThreadForkPayload,
 } from "../../contracts/workerProtocol.js";
 import { ExecutionError } from "../../contracts/errors.js";
@@ -382,6 +383,27 @@ export class EchoRuntime implements WorkerProviderRuntime {
         messageCount: forked.messages.length,
       },
     });
+  }
+
+  /**
+   * Answer one prompt deterministically, with no thread attached.
+   *
+   * The echo runtime stands in for an agent in the test suite, so it answers
+   * text generation with one object that satisfies every shape T3 asks for
+   * (commit subject and body, change-request title, branch, thread title) and
+   * quotes the prompt, so a test can prove the prompt travelled and was not
+   * answered from somewhere else.
+   */
+  async textGenerate(payload: TextGeneratePayload): Promise<{ text: string }> {
+    return {
+      text: JSON.stringify({
+        subject: "echo subject",
+        body: `echo body\n\nprompt: ${payload.prompt.slice(0, 200)}`,
+        title: "echo title",
+        branch: "echo branch",
+        needsRefinement: false,
+      }),
+    };
   }
 
   private emitThread(threadId: string): void {

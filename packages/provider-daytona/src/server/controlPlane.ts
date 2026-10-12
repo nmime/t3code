@@ -206,6 +206,18 @@ export class DaytonaControlPlane {
     return profiles;
   }
 
+  /**
+   * Answer one prompt in the sandbox that owns `cwd`, with no conversation
+   * attached: the sandbox side of T3's text generation. The reply is raw text;
+   * the caller decodes it against the operation's own schema.
+   */
+  async generateText(input: { cwd: string; prompt: string; model?: string }): Promise<string> {
+    const { text } = await this.request<{ text: string }>("POST", "/text-generation", input, {
+      timeoutMs: 15 * 60_000,
+    });
+    return text;
+  }
+
   async listTasks(): Promise<DaytonaTask[]> {
     const { tasks } = await this.request<{ tasks: DaytonaTask[] }>("GET", "/tasks");
     return tasks;

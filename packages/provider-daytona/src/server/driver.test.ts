@@ -13,17 +13,20 @@ import { after, before, test } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import { ModelSelection, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { ControlPlaneServer } from "../../../daytona/dist/src/execution/ControlPlaneServer.js";
 import { ProcessWorkerLauncher } from "../../../daytona/dist/src/execution/SandboxControlPlane.js";
 import { decodeDaytonaSettings } from "./config.ts";
+import { DaytonaControlPlane } from "./controlPlane.ts";
 import { DaytonaDriver } from "./driver.ts";
 
 const TOKEN = "driver-test-token";
@@ -58,13 +61,10 @@ after(async () => {
   await server.stop();
 });
 
-/** Materialize the driver's instance and read the snapshot a client would see. */
-const snapshotFor = (
-  config: Record<string, unknown>,
-  enabled = true,
-): Effect.Effect<ServerProvider, ProviderDriverError> =>
+/** Materialize the driver's instance, as the server's registry would. */
+const instanceFor = (config: Record<string, unknown>, enabled = true) =>
   Effect.gen(function* () {
-    const instance = yield* DaytonaDriver.create({
+    return yield* DaytonaDriver.create({
       instanceId: ProviderInstanceId.make("daytona_test"),
       displayName: "Daytona (test)",
       accentColor: undefined,
@@ -72,11 +72,30 @@ const snapshotFor = (
       enabled,
       config: decodeDaytonaSettings(config),
     });
-    return yield* instance.snapshot.getSnapshot;
   }).pipe(
     Effect.provide(TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer))),
     Effect.scoped,
   );
+
+/** The snapshot a client would see for an instance with this config. */
+const snapshotFor = (
+  config: Record<string, unknown>,
+  enabled = true,
+): Effect.Effect<ServerProvider, ProviderDriverError> =>
+  instanceFor(config, enabled).pipe(Effect.flatMap((instance) => instance.snapshot.getSnapshot));
+
+const waitFor = async (
+  predicate: () => boolean,
+  timeoutMs = 20_000,
+  label = "condition",
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+};
 
 test("a reachable control plane with the named profile is ready", async () => {
   const snapshot = await Effect.runPromise(
@@ -158,4 +177,96 @@ test("a turned-off instance is disabled", async () => {
 
   assert.equal(snapshot.status, "disabled");
   assert.match(snapshot.message ?? "", /turned off/);
+});
+
+test("text generation runs the agent in the sandbox, and refuses what it cannot promise", async () => {
+  // A task first: the prompt runs where the agent does, so the control plane
+  // resolves the caller's cwd to the task that owns it.
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "t3x-driver-gen-"));
+  const run = (command: string) =>
+    spawnSync("bash", ["-c", command], { cwd: origin, encoding: "utf8" });
+  run("git init -q -b main");
+  run("git config user.email a@b.c");
+  run("git config user.name t");
+  fs.writeFileSync(path.join(origin, "README.md"), "# generate\n");
+  run("git add -A && git commit -qm init");
+
+  const client = new DaytonaControlPlane({ url: `http://127.0.0.1:${server.port}`, token: TOKEN });
+  const task = await client.createTask({
+    profileId: "provider-test",
+    provider: "echo",
+    repositoryUrl: origin,
+  });
+  await server.effectWorker.drain();
+  await waitFor(() => server.registry.isConnected(task.taskId), 30_000, "worker attach");
+  await waitFor(() => server.tasks.getTask(task.taskId).state === "ready", 15_000, "ready");
+  const { worktreePath } = await client.status(task.taskId);
+
+  const instance = await Effect.runPromise(
+    instanceFor({
+      enabled: true,
+      controlPlaneUrl: `http://127.0.0.1:${server.port}`,
+      apiToken: TOKEN,
+      profileId: "provider-test",
+      agent: "echo",
+      repositoryUrl: origin,
+    }),
+  );
+  const modelSelection = Schema.decodeSync(ModelSelection)({
+    instanceId: "daytona_test",
+    model: "default",
+  });
+
+  const commit = await Effect.runPromise(
+    instance.textGeneration.generateCommitMessage({
+      cwd: worktreePath,
+      branch: "main",
+      stagedSummary: "1 file changed",
+      stagedPatch: "diff --git a/README.md b/README.md",
+      modelSelection,
+    }),
+  );
+  assert.equal(commit.subject, "echo subject");
+  assert.match(commit.body, /echo body/);
+
+  const branch = await Effect.runPromise(
+    instance.textGeneration.generateBranchName({
+      cwd: worktreePath,
+      message: "add a thing",
+      modelSelection,
+    }),
+  );
+  assert.match(branch.branch, /echo/);
+
+  const title = await Effect.runPromise(
+    instance.textGeneration.generateThreadTitle({
+      cwd: worktreePath,
+      message: "hello",
+      modelSelection,
+    }),
+  );
+  assert.equal(title.title, "echo title");
+
+  // The review guide needs read-only tools over several turns; a one-shot
+  // invocation cannot promise that, so it is refused instead of answered blind.
+  const refused = await Effect.runPromise(
+    Effect.result(
+      instance.textGeneration.generateReviewGuide({
+        cwd: worktreePath,
+        number: 1,
+        title: "A change",
+        description: "Why it is here",
+        baseBranch: "main",
+        baseCommit: "HEAD~1",
+        settledReview: "",
+        modelSelection,
+      }),
+    ),
+  );
+  assert.equal(refused._tag, "Failure");
+  assert.match(refused._tag === "Failure" ? refused.failure.message : "", /read-only/);
+
+  // And none of it entered the conversation.
+  const snapshot = await client.snapshot(task.taskId);
+  assert.equal(snapshot.messages.length, 0);
 });

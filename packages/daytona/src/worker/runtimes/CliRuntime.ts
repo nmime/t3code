@@ -21,6 +21,7 @@ import type {
   TurnSteerPayload,
   RuntimeRequestRespondPayload,
   ThreadRollbackPayload,
+  TextGeneratePayload,
   ThreadForkPayload,
 } from "../../contracts/workerProtocol.js";
 import { CapabilityUnsupportedError, ExecutionError } from "../../contracts/errors.js";
@@ -268,6 +269,62 @@ export class CliRuntime implements WorkerProviderRuntime {
 
   async forkThread(_payload: ThreadForkPayload): Promise<void> {
     throw new CapabilityUnsupportedError(this.driver, "fork");
+  }
+
+  /**
+   * Answer one prompt with no thread attached.
+   *
+   * The command a profile declares for this agent is already a one-shot
+   * invocation (`codex exec "$PROMPT"`, `claude -p "$PROMPT"`, `opencode run`,
+   * `pi --prompt`), so the reply is that process's stdout. Nothing is emitted
+   * as a turn, so a generated commit message never lands in the conversation
+   * that asked for it.
+   */
+  async textGenerate(payload: TextGeneratePayload): Promise<{ text: string }> {
+    const cwd = payload.cwd ?? process.cwd();
+    const command = this.config.command
+      .split("$PROMPT")
+      .join(shellQuote(payload.prompt))
+      .split("$CWD")
+      .join(shellQuote(cwd));
+    return await new Promise<{ text: string }>((resolve, reject) => {
+      const child = spawn("bash", ["-c", command], {
+        cwd,
+        env: {
+          ...(process.env as Record<string, string>),
+          ...(this.config.configEnv ?? {}),
+          ...(this.config.env ?? {}),
+          T3X_PROVIDER: this.driver,
+        },
+        detached: true,
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      child.on("error", (err) =>
+        reject(
+          new ExecutionError("worker_unavailable", `could not run ${this.driver}: ${String(err)}`),
+        ),
+      );
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve({ text: stdout.trim() });
+          return;
+        }
+        reject(
+          new ExecutionError(
+            "capability_unsupported",
+            `${this.driver} exited ${code} answering a generation prompt`,
+            { stderr: stderr.slice(-2_000) },
+          ),
+        );
+      });
+    });
   }
 
   stateSnapshot(): unknown {
