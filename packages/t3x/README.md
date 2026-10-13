@@ -249,6 +249,9 @@ surfaces — HTTP API and CLI — driven as a Mac/phone client would drive them
   setup, credentials, recovery and troubleshooting.
 - [`profiles/`](profiles) — example environment profiles.
 - [`deploy/t3x-control-plane.service`](deploy/t3x-control-plane.service) — systemd unit.
+- [`deploy/host-t3-app.sh`](deploy/host-t3-app.sh) — the same host, running the
+  T3 Code app itself (web UI + server) behind nginx, with one OpenSandbox
+  provider instance pointed at this control plane.
 - [`deploy/sandbox-image/Dockerfile`](deploy/sandbox-image/Dockerfile) — the image
   every sandbox is built from.
 - [`deploy/ci.yml`](deploy/ci.yml) — GitHub Actions workflow (copy to
