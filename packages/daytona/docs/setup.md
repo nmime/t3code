@@ -17,7 +17,9 @@ The pieces:
 
 ## 0. Prerequisites
 
-- **Node ≥ 22** on the control-plane host and on the machine running T3.
+- **Node ≥ 22** on the control-plane host and on the machine running T3. The
+  monorepo's own `engines` wants `^24.13.1` and the control plane needs
+  `>=22.5.0`, so install Node 24 if you are choosing.
 - **git** inside the sandboxes (checkpoints are git-based).
 - A **Daytona deployment and an API key**:
   - managed cloud: create a key in your Daytona organization;
@@ -37,6 +39,21 @@ The pieces:
 ---
 
 ## 1. Get the code and build the control plane
+
+`packages/daytona/deploy/t3x-bootstrap.sh` does all of step 1 to 4 on a fresh
+Ubuntu host — packages, Node, checkout, build, the SDK, the `t3x` user,
+`/etc/t3x/env`, the worker bundle, a profile, the systemd unit, TLS (Caddy, or
+one nginx server block when the host already runs nginx) and a final `doctor` —
+and it is idempotent, so re-running it updates the checkout and restarts the
+service. Copy it over and run it:
+
+```bash
+scp packages/daytona/deploy/t3x-bootstrap.sh root@your-vps:/root/
+ssh root@your-vps
+DAYTONA_API_KEY=... DOMAIN=t3x.example.com bash /root/t3x-bootstrap.sh
+```
+
+The rest of this section is what it does, by hand.
 
 ```bash
 git clone https://github.com/nmime/t3code
@@ -149,7 +166,8 @@ node packages/daytona/dist/src/cli.js serve \
 
 - `--worker-url` is the address a **sandbox** dials. `127.0.0.1` is only right
   when the worker runs on the control-plane host. Put TLS in front of it (a
-  reverse proxy is enough); the control plane needs no inbound port of its own.
+  reverse proxy is enough); the control plane needs no inbound port of its own —
+  it binds `127.0.0.1` only.
 - `--api-token` is required if the control plane is reachable from anywhere but
   localhost; pass the same token to T3 in step 5.
 - `--backend auto` (the default) picks Daytona when a key is set, the local
@@ -160,6 +178,46 @@ node packages/daytona/dist/src/cli.js serve \
 curl -s localhost:8087/health
 curl -s -H "authorization: Bearer $TOKEN" localhost:8087/profiles
 ```
+
+### Behind an existing nginx
+
+If the host already terminates TLS with nginx (a machine with other sites on
+it), do not install a second web server — add one server block and let certbot
+fill in the certificate, exactly as it does for the other vhosts:
+
+```nginx
+# /etc/nginx/sites-available/t3x.conf -> /etc/nginx/sites-enabled/t3x.conf
+server {
+    listen 80;
+    listen [::]:80;
+    server_name t3x.example.com;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+
+    location / {
+        proxy_pass http://127.0.0.1:8087;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_read_timeout 3600s;   # turns and streams are long-lived
+        proxy_send_timeout 3600s;
+        proxy_buffering    off;
+    }
+}
+```
+
+```bash
+ln -s /etc/nginx/sites-available/t3x.conf /etc/nginx/sites-enabled/t3x.conf
+nginx -t && systemctl reload nginx
+certbot --nginx -d t3x.example.com --redirect --keep-until-expiring
+```
+
+No domain of your own pointing here yet? `<ip-with-dashes>.sslip.io` resolves
+to the address and certbot can issue for it.
 
 ## 5. Point T3 at the control plane
 
