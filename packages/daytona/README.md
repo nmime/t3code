@@ -340,6 +340,21 @@ and the SDK resolves, and otherwise reports as skipped:
 `T3X_DAYTONA_TEST_SNAPSHOT` (default `daytona-small`) selects the snapshot;
 `T3X_DAYTONA_TEST_REPO` the repository the control-plane test clones.
 
+### The end-to-end smoke test
+
+```bash
+DAYTONA_API_KEY=... node packages/daytona/scripts/sandbox-smoke/run.mjs
+```
+
+It creates a sandbox, ships the built package into it, and runs
+`scripts/sandbox-smoke/smoke.sh` there: the control plane **and** the worker
+inside that one sandbox (so the worker's WebSocket is real, without having to
+cross a network boundary), covering task creation, worker attach, a real turn,
+the runtime-mode cap, fork, text generation, sandbox scope and reference
+counting, stop refusal, per-worktree git state and checkpoints — 43 checks. The
+sandbox is deleted afterwards, including when a check fails. `T3X_SMOKE_KEEP=1`
+leaves it for inspection.
+
 **What those tests still do not prove.** The worker's dial _into_ the control
 plane is not exercised end to end from a real sandbox in a network where the
 control plane is not reachable: the tests stop at that boundary (the run ends
