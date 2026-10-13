@@ -59,6 +59,22 @@ Snapshots named by `runtime.snapshot` in a profile must exist in the Daytona
 organization before tasks are created; creating from a snapshot ignores the
 profile's `runtime.resources`, because the snapshot fixes them.
 
+### Self-hosted Daytona
+
+The same SDK talks to your own deployment; only the endpoint changes:
+
+```bash
+export DAYTONA_API_URL=https://daytona.example.com/api   # your deployment
+export DAYTONA_API_KEY=<a key created there>
+export DAYTONA_TARGET=<region>                           # optional
+export T3X_DAYTONA_DEFAULT_IMAGE=daytonaio/sandbox:0.9.0 # image used when a profile names no snapshot
+```
+
+`--daytona-api-url`, `--daytona-target` and `--daytona-default-image` override
+those for one `serve` run, and the banner prints the endpoint and target it
+resolved. Snapshots and images come from your deployment, so a profile that
+names a snapshot must name one it actually has.
+
 Three requirements that fail silently when missed:
 
 | Requirement             | Why                                                                                                                |
@@ -83,9 +99,14 @@ Rules the backend enforces:
 ### Verifying a Daytona host
 
 ```bash
-node dist/src/cli.js doctor                      # node, worker entry, SDK, API key
+node dist/src/cli.js doctor                      # node, worker entry, SDK, endpoint, key, reachability
+node dist/src/cli.js doctor --daytona-api-url https://daytona.example.com/api
 DAYTONA_API_KEY=... node --test packages/daytona/dist/tests/integration/daytonaReal.test.js
 ```
+
+`doctor` probes the deployment when a key is set and exits non-zero on any
+failed check, which is what tells "the URL is wrong" apart from "the key is
+wrong" before a task is ever created.
 
 The real-API suite creates sandboxes and deletes them again; set
 `T3X_DAYTONA_TEST_SNAPSHOT` to a snapshot your organization actually has.

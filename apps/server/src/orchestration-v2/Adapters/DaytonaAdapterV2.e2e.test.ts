@@ -1,0 +1,230 @@
+/**
+ * The Daytona adapter through T3's real orchestration path.
+ *
+ * Every other test in this integration stops at the control-plane boundary: it
+ * proves the client, the control plane and the worker agree with each other.
+ * This one starts where a user does — a `thread.create` and a `message.dispatch`
+ * command — and runs the real orchestrator, provider session manager, turn
+ * start service, run execution service and `ProviderEventIngestor` over the
+ * Daytona adapter, against a real control plane, a real sandbox directory and a
+ * real worker process. What it asserts is what T3's own projection holds
+ * afterwards, which is what the UI would render.
+ *
+ * The control plane is imported from `packages/daytona/dist`, because the
+ * control plane spawns the worker from the build next to it. `pnpm -r test`
+ * builds it before this package's tests run; a developer running this file
+ * alone needs `pnpm --filter @t3tools/daytona build` first.
+ *
+ * @module orchestration-v2/Adapters/DaytonaAdapterV2.e2e.test
+ */
+// @effect-diagnostics nodeBuiltinImport:off -- the fixture makes a git checkout and a state directory
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import {
+  CommandId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  type OrchestrationV2Command,
+} from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+import {
+  DAYTONA_DRIVER,
+  DaytonaControlPlane,
+  DaytonaDriver,
+} from "@t3tools/provider-daytona/server";
+import { assert, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import * as Orchestrator from "../Orchestrator.ts";
+import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
+import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
+import { layerWithRegistry } from "../testkit/ProviderReplayHarness.ts";
+import { runOrchestratorV2Scenario } from "../testkit/OrchestratorScenario.ts";
+import { ControlPlaneServer } from "../../../../../packages/daytona/dist/src/execution/ControlPlaneServer.js";
+import { ProcessWorkerLauncher } from "../../../../../packages/daytona/dist/src/execution/SandboxControlPlane.js";
+
+const instanceId = ProviderInstanceId.make("daytona_e2e");
+
+const profile = {
+  apiVersion: "t3-daytona/v1",
+  kind: "EnvironmentProfile",
+  metadata: { name: "provider-test", version: 1 },
+  runtime: { snapshot: "node24-dev-v3", resources: { cpu: 2, memoryGiB: 4 } },
+  project: { workingDirectory: "/workspace/project", setup: [] },
+  environment: { NODE_ENV: "development" },
+  agents: { allowed: ["echo", "codex"], defaults: { provider: "echo" } },
+};
+
+/** A real checkout, so the task gets a worktree in a shared project sandbox. */
+const makeRepository = (): string => {
+  const origin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3x-e2e-origin-"));
+  const run = (command: string) =>
+    NodeChildProcess.spawnSync("bash", ["-c", command], { cwd: origin });
+  run("git init -q -b main");
+  run("git config user.email a@b.c");
+  run("git config user.name t");
+  NodeFS.writeFileSync(NodePath.join(origin, "README.md"), "# end to end\n");
+  run("git add -A && git commit -qm init");
+  return origin;
+};
+
+// The live clock: this test talks to a real control plane over HTTP and waits
+// for real processes, so `Effect.sleep` has to be real time too.
+it.live(
+  "a dispatched message reaches T3's projection through the real ingestor",
+  () =>
+    Effect.gen(function* () {
+      const repositoryUrl = makeRepository();
+      const server = yield* Effect.promise(() =>
+        ControlPlaneServer.start({
+          stateDir: NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3x-e2e-state-")),
+          port: 0,
+          launcher: new ProcessWorkerLauncher(),
+          // The control plane's own effect loop stays on: it is what starts the
+          // turn in the sandbox after T3 dispatches a message.
+          workerAttachTimeoutMs: 30_000,
+        }),
+      );
+      yield* Effect.addFinalizer(() => Effect.promise(() => server.stop()));
+      server.profiles.createProfile({ profileId: "provider-test", body: profile as never });
+
+      // The client is the test's own window into the control plane: the driver
+      // builds its own for the adapter.
+      const client = new DaytonaControlPlane({
+        url: `http://127.0.0.1:${server.port}`,
+        token: undefined,
+      });
+      // The real path, as the server builds it: a provider instance in the
+      // settings config map, resolved by the Daytona driver into an adapter —
+      // the same `create` that `ProviderInstanceRegistry` calls in production.
+      // Registering the adapter directly would skip the instance registry T3
+      // needs to attribute a session to an instance.
+      // The production path: a provider instance in the settings config map,
+      // built by the v1 driver `apps/server` lists in BUILT_IN_DRIVERS, whose
+      // `orchestrationAdapter` the orchestration runtime talks to. Building the
+      // adapter directly would skip both the driver and the instance registry.
+      const registryLayer = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ProviderInstanceRegistry.layer({
+              drivers: [DaytonaDriver],
+              configMap: {
+                [instanceId]: {
+                  driver: DAYTONA_DRIVER,
+                  displayName: "Daytona (end to end)",
+                  config: {
+                    controlPlaneUrl: `http://127.0.0.1:${server.port}`,
+                    profileId: "provider-test",
+                    agent: "echo",
+                    repositoryUrl,
+                    sandboxScope: "project",
+                  },
+                },
+              },
+            }),
+            NodeServices.layer,
+            TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+          ),
+        ),
+      );
+
+      const threadId = ThreadId.make("thread:daytona-e2e");
+      const projectId = ProjectId.make("project:daytona-e2e");
+      const commands: ReadonlyArray<OrchestrationV2Command> = [
+        {
+          type: "thread.create",
+          commandId: CommandId.make("create:daytona-e2e"),
+          threadId,
+          projectId,
+          title: "Daytona end to end",
+          modelSelection: { instanceId, model: "default" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        },
+        {
+          type: "message.dispatch",
+          commandId: CommandId.make("dispatch:daytona-e2e"),
+          threadId,
+          messageId: MessageId.make("message:daytona-e2e"),
+          text: "hello from T3",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        },
+      ];
+      // Steps, not `commands`: when a scenario lists steps the harness runs the
+      // commands inside them and ignores the `commands` field entirely.
+      const scenario = {
+        name: "daytona-e2e",
+        commands,
+        steps: [
+          { type: "dispatch" as const, command: commands[0]!, await: true },
+          { type: "dispatch" as const, command: commands[1]!, await: true },
+        ],
+        projectionThreadIds: [threadId],
+      };
+
+      const result = yield* runOrchestratorV2Scenario(scenario, {
+        afterSteps: Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          for (let attempt = 0; attempt < 60; attempt++) {
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            const task = yield* Effect.promise(() =>
+              client.findTaskByThread(String(threadId)).catch(() => null),
+            );
+            // eslint-disable-next-line no-console -- a stalled end-to-end run has to say where
+            console.log(
+              `[daytona-e2e] ${attempt} task=${task?.taskId ?? "none"} state=${task?.state ?? "-"} ` +
+                `runs=${JSON.stringify(projection.runs.map((run) => ({ s: run.status, f: run.failure ?? null })))} ` +
+                `sessions=${JSON.stringify(projection.providerSessions.map((session) => ({ d: session.driver, s: session.status })))} ` +
+                `turns=${projection.providerTurns.length} messages=${projection.messages.length} ` +
+                `requests=${JSON.stringify(projection.runtimeRequests.map((request) => request.status))}`,
+            );
+            if (projection.messages.length >= 2) return;
+            yield* Effect.sleep(Duration.seconds(1));
+          }
+        }),
+      }).pipe(
+        Effect.provide(layerWithRegistry(scenario, registryLayer, { runEffectWorker: true })),
+        Effect.provide(TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer))),
+      );
+
+      // What T3's own projection holds after the turn: the user's message, and
+      // the agent's reply, which only exists if the whole path worked — the
+      // orchestrator asked the adapter, the adapter asked the control plane,
+      // the control plane started a worker, the worker ran the agent, and the
+      // events came back through the ingestor.
+      const projection = result.projections.get(threadId);
+      assert.ok(projection, "the thread has a projection");
+      const text = JSON.stringify(projection.messages);
+      assert.match(text, /hello from T3/, "the user's message is in the projection");
+      assert.match(
+        text,
+        /echo\[full-access\]: hello from T3/,
+        "the agent's reply is in the projection, under the mode the thread asked for",
+      );
+
+      // The sandbox really ran the turn: the provider thread T3 recorded came
+      // from the worker, not from the adapter's own bookkeeping.
+      assert.equal(projection.providerThreads.length, 1);
+      assert.match(
+        String(projection.providerThreads[0]?.nativeThreadRef?.nativeId ?? ""),
+        /^echo_/,
+        "the provider thread T3 recorded carries the worker's native id",
+      );
+    }),
+  120_000,
+);

@@ -193,21 +193,54 @@ creation, turns, the snapshot a client resumes from, the event stream, an
 approval round trip, checkpoint rollback, forking, text generation, the
 runtime-mode cap, typed refusals and the shared-sandbox worktree model.
 
-### What the tests do not prove
+### The end-to-end test through T3's own orchestration
 
-Everything here stops at the **control-plane boundary**: the adapter, the client,
-the control plane and the worker are all real, but the events T3's own
-`ProviderEventIngestor` and `RunExecutionService` produce from them are not
-exercised. `apps/server`'s replay harness
-(`apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts`) can drive a
-live adapter through the real orchestrator — `layerWithRegistry` takes any
-`ProviderAdapterRegistryV2` layer — and a test doing that for this adapter was
-written and run: the scenario dispatches `thread.create` and `message.dispatch`,
-T3 opens the session, and the run fails inside T3's own provider-session-activity
-write (`ProviderSessionActivityError` → `EventSinkWriteError` →
-`PersistenceDecodeError` in `appendAgentEvents`), before the adapter is asked for
-a turn. Until that is understood, treat "T3's projections show a sandbox turn" as
-unproven.
+`apps/server/src/orchestration-v2/Adapters/DaytonaAdapterV2.e2e.test.ts` is the
+one test that does not stop at the control-plane boundary. It dispatches a real
+`thread.create` and `message.dispatch` through T3's real orchestrator, session
+manager, turn-start service, `RunExecutionService` and `ProviderEventIngestor`,
+over the real v1 driver and the real adapter, against a real control plane with
+a real worker process — and asserts what T3's own projection holds afterwards:
+the user's message, the agent's reply under the runtime mode the thread asked
+for, one provider thread carrying the worker's native id, and one provider turn.
+
+```bash
+pnpm --filter @t3tools/daytona build     # the test imports the built control plane
+node_modules/.bin/vp test run apps/server/src/orchestration-v2/Adapters/DaytonaAdapterV2.e2e.test.ts --no-file-parallelism
+```
+
+It needs `TestProviderHost` in the runtime context (the replay harness does not
+provide it, because replay adapters never ask for it) — that is the one piece of
+setup the test does that the replay harness does not.
+
+Writing it found five contract bugs the boundary-level tests could not see, all
+of which are now covered by `src/server/events.test.ts`:
+
+- `providerSession.createdAt`/`updatedAt` were JavaScript `Date`s where T3's
+  schema wants `DateTime.Utc`, so the session's own activity write failed and
+  took the turn start with it. The `as never` casts that hid this are gone.
+- mapped messages and turns carried the _control plane's_ run id, so T3's run
+  router dropped every one of them (`ownsRun`) and the run never completed;
+- `providerTurn.runAttemptId` was null, so T3 never recognized its own root turn
+  and dropped `turn.terminal` with it;
+- the user's own message was mapped back into T3, duplicating it;
+- the adapter minted its own provider-thread row instead of adopting the
+  provisional row T3 hands over as `existingProviderThread`, and re-keyed the
+  thread from the worker's native id on `thread.updated` — either one leaves two
+  provider-thread rows per app thread, with `activeProviderThreadId` flapping
+  between them.
+
+### What the tests still do not prove
+
+One leg, and it is environmental rather than code: a _remote_ sandbox dialing a
+control plane across a network boundary. Everywhere a control plane and its
+worker can reach each other (the local backend, a VPS, a self-hosted Daytona
+deployment), the path is the same code and is covered — the local suite runs the
+real child process over a real WebSocket, and the e2e test above runs the whole
+loop. On the managed cloud's restricted-egress tier a task sandbox cannot reach
+a control plane hosted anywhere else, so there the run stops with
+`task.worker_attach_failed` after the bundle lands and the worker process starts.
+`packages/daytona/README.md` says the same thing from the control plane's side.
 
 ## Typechecking
 

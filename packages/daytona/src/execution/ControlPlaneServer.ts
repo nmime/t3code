@@ -66,7 +66,13 @@ export type SandboxBackendKind = "auto" | "local" | "daytona";
 export async function createSandboxBackend(options: {
   stateDir: string;
   kind?: SandboxBackendKind;
-  daytona?: { apiKey?: string; apiUrl?: string; defaultAutoStopMinutes?: number };
+  daytona?: {
+    apiKey?: string;
+    apiUrl?: string;
+    target?: string;
+    defaultImage?: string;
+    defaultAutoStopMinutes?: number;
+  };
 }): Promise<SandboxBackend> {
   const kind = options.kind ?? "auto";
   if (kind === "local") return new LocalBackend(path.join(options.stateDir, "sandboxes"));
@@ -76,6 +82,8 @@ export async function createSandboxBackend(options: {
   return await DaytonaBackend.create({
     apiKey,
     ...(options.daytona?.apiUrl ? { apiUrl: options.daytona.apiUrl } : {}),
+    ...(options.daytona?.target ? { target: options.daytona.target } : {}),
+    ...(options.daytona?.defaultImage ? { defaultImage: options.daytona.defaultImage } : {}),
     ...(options.daytona?.defaultAutoStopMinutes !== undefined
       ? { defaultAutoStopMinutes: options.daytona.defaultAutoStopMinutes }
       : {}),

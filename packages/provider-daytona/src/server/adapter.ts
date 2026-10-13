@@ -10,14 +10,19 @@
  * still the right place for the work.
  */
 import {
+  MessageId,
+  NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  RunId,
+  RuntimeRequestId,
   ThreadId,
   type ModelSelection,
   type OrchestrationV2ProviderCapabilities,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -34,7 +39,12 @@ import {
   type DaytonaSnapshot,
   type DaytonaTask,
 } from "./controlPlane.ts";
-import { ProviderEventMapper, threadFromSnapshot, turnsFromSnapshot } from "./events.ts";
+import {
+  ProviderEventMapper,
+  threadFromSnapshot,
+  turnsFromSnapshot,
+  type MapperContext,
+} from "./events.ts";
 
 export const DAYTONA_DRIVER_KIND = ProviderDriverKind.make("daytona");
 
@@ -119,7 +129,38 @@ export const makeAdapter = (
       const appThreadId = input.threadId as unknown as string;
       const cwd = input.runtimePolicy.cwd ?? "/workspace/project";
       const tasks = new Map<string, DaytonaTask>();
+      /** Control-plane turn id per control-plane run id, learned from events. */
       const turnsByRun = new Map<string, string>();
+      /**
+       * Which app run T3 is executing for a control-plane run.
+       *
+       * T3 routes a provider event to the run whose id it recognizes, so every
+       * mapped message and turn has to carry T3's run id and attempt id — the
+       * ids `startTurn` was handed — rather than the control plane's own.
+       */
+      const appRunsByRun = new Map<string, { runId: string; attemptId: string; nodeId: string }>();
+      /**
+       * The provider-thread row T3 holds for this session.
+       *
+       * T3 opens a run with a provisional row and passes it to `ensureThread`
+       * as `existingProviderThread`; adopting that identity is what keeps one
+       * row per app thread instead of two that alternate as the active thread.
+       */
+      let providerThreadIdentity: string | null = null;
+      const adoptProviderThread = (existing: { id: unknown } | undefined): void => {
+        if (existing?.id !== undefined) providerThreadIdentity = String(existing.id);
+      };
+
+      const runContext = (runId: string | undefined) => {
+        const providerTurnId = runId ? turnsByRun.get(runId) : undefined;
+        const app = runId ? appRunsByRun.get(runId) : undefined;
+        return {
+          ...(providerTurnId ? { providerTurnId } : {}),
+          ...(app
+            ? { runId: app.runId, attemptId: app.attemptId, nodeId: NodeId.make(app.nodeId) }
+            : {}),
+        };
+      };
 
       const mapper = new ProviderEventMapper({
         driver: DAYTONA_DRIVER_KIND,
@@ -128,10 +169,8 @@ export const makeAdapter = (
         appThreadId,
         cwd,
         capabilities,
-        runContext: (runId) => {
-          const providerTurnId = runId ? turnsByRun.get(runId) : undefined;
-          return providerTurnId ? { providerTurnId } : {};
-        },
+        runContext,
+        providerThreadId: () => providerThreadIdentity,
       });
 
       const taskIdFor = (threadId: string): string | null => tasks.get(threadId)?.taskId ?? null;
@@ -198,8 +237,10 @@ export const makeAdapter = (
           cwd,
           model: input.modelSelection.model,
           capabilities,
-          createdAt: new Date() as never,
-          updatedAt: new Date() as never,
+          // T3 stores this payload as a `provider-session.attached` event, and
+          // its schema wants a `DateTime.Utc`, not a JavaScript `Date`.
+          createdAt: DateTime.makeUnsafe(Date.now()),
+          updatedAt: DateTime.makeUnsafe(Date.now()),
           lastError: null,
         },
         events: Stream.fromQueue(events),
@@ -207,6 +248,7 @@ export const makeAdapter = (
         ensureThread: (ensureInput) =>
           Effect.tryPromise({
             try: async () => {
+              adoptProviderThread(ensureInput.existingProviderThread);
               const task = await ensureTask(
                 ensureInput.threadId as unknown as string,
                 ensureInput.modelSelection,
@@ -215,7 +257,15 @@ export const makeAdapter = (
               tasks.set(ensureInput.threadId as unknown as string, task);
               const snapshot = await snapshotOf(task.taskId);
               return threadFromSnapshot(
-                mapperContext(mapper, cwd, capabilities, options, input),
+                mapperContext(
+                  mapper,
+                  cwd,
+                  capabilities,
+                  options,
+                  input,
+                  runContext,
+                  () => providerThreadIdentity,
+                ),
                 snapshot,
               );
             },
@@ -230,6 +280,7 @@ export const makeAdapter = (
         resumeThread: (resumeInput) =>
           Effect.tryPromise({
             try: async () => {
+              adoptProviderThread(resumeInput.providerThread);
               const taskId = taskIdFor(appThreadId);
               if (!taskId) {
                 const task = await ensureTask(appThreadId, input.modelSelection);
@@ -237,7 +288,15 @@ export const makeAdapter = (
               }
               const snapshot = await snapshotOf(taskIdFor(appThreadId) ?? "");
               return threadFromSnapshot(
-                mapperContext(mapper, cwd, capabilities, options, input),
+                mapperContext(
+                  mapper,
+                  cwd,
+                  capabilities,
+                  options,
+                  input,
+                  runContext,
+                  () => providerThreadIdentity,
+                ),
                 snapshot,
               );
             },
@@ -258,7 +317,7 @@ export const makeAdapter = (
                 task = await ensureTask(threadId, turnInput.modelSelection);
                 tasks.set(threadId, task);
               }
-              await client.sendMessage(
+              const started = await client.sendMessage(
                 task.taskId,
                 turnInput.message.text,
                 turnInput.modelSelection.model,
@@ -270,6 +329,13 @@ export const makeAdapter = (
                   interactionMode: turnInput.runtimePolicy.interactionMode,
                 },
               );
+              // Remember which app run this sandbox run is, so the events the
+              // control plane emits for it can be addressed back to T3's run.
+              appRunsByRun.set(started.runId, {
+                runId: String(turnInput.runId),
+                attemptId: String(turnInput.attemptId),
+                nodeId: String(turnInput.rootNodeId),
+              });
             },
             catch: (cause) =>
               new ProviderAdapter.ProviderAdapterTurnStartError({
@@ -339,7 +405,7 @@ export const makeAdapter = (
 
         readThreadSnapshot: (snapshotInput) =>
           Effect.tryPromise({
-            try: async () => {
+            try: async (): Promise<ProviderAdapter.ProviderAdapterV2ThreadSnapshot> => {
               const taskId =
                 taskIdFor(snapshotInput.providerThread.appThreadId as unknown as string) ??
                 tasks.get(appThreadId)?.taskId;
@@ -349,32 +415,51 @@ export const makeAdapter = (
               return {
                 providerThread: threadFromSnapshot(context, snapshot),
                 providerTurns: turnsFromSnapshot(context, snapshot),
-                messages: snapshot.messages.map((message) => ({
-                  id: message.messageId as never,
-                  threadId: appThreadId as never,
-                  runId: (message.runId ?? null) as never,
-                  nodeId: null,
-                  role: message.role === "user" ? "user" : "assistant",
-                  text: message.text,
-                  attachments: [],
-                  streaming: message.streaming === true,
-                  createdBy: message.role === "user" ? "user" : "agent",
-                  creationSource: "provider",
-                  createdAt: new Date() as never,
-                  updatedAt: new Date() as never,
-                })),
-                runtimeRequests: snapshot.runtimeRequests.map((request) => ({
-                  id: request.requestId as never,
-                  nodeId: `node_${request.requestId}` as never,
-                  providerTurnId: null,
-                  nativeRequestRef: null,
-                  kind: request.kind === "approval" ? "permission" : "user_input",
-                  status: request.status === "pending" ? "pending" : "resolved",
-                  responseCapability: { type: "message" },
-                  createdAt: new Date() as never,
-                  resolvedAt: request.status === "pending" ? null : (new Date() as never),
-                })),
-              } as never;
+                messages: snapshot.messages.map((message) => {
+                  // The snapshot's own timestamp when the log carried one; a
+                  // read of a message the log has no time for is stamped now.
+                  const at = DateTime.makeUnsafe(message.createdAt ?? Date.now());
+                  return {
+                    id: MessageId.make(message.messageId),
+                    threadId: input.threadId,
+                    runId:
+                      message.runId === undefined
+                        ? null
+                        : (() => {
+                            const app = appRunsByRun.get(message.runId);
+                            return app ? RunId.make(app.runId) : null;
+                          })(),
+                    nodeId: null,
+                    role: message.role === "user" ? "user" : "assistant",
+                    text: message.text,
+                    attachments: [],
+                    streaming: message.streaming === true,
+                    createdBy: message.role === "user" ? "user" : "agent",
+                    creationSource: "provider",
+                    createdAt: at,
+                    updatedAt: at,
+                  };
+                }),
+                runtimeRequests: snapshot.runtimeRequests.map((request) => {
+                  const at = DateTime.makeUnsafe(request.createdAt ?? Date.now());
+                  return {
+                    id: RuntimeRequestId.make(request.requestId),
+                    nodeId: NodeId.make(`node_${request.requestId}`),
+                    providerTurnId: null,
+                    nativeRequestRef: null,
+                    kind: request.kind === "approval" ? "permission" : "user_input",
+                    status: request.status === "pending" ? "pending" : "resolved",
+                    responseCapability: { type: "message" },
+                    createdAt: at,
+                    resolvedAt:
+                      request.status === "pending"
+                        ? null
+                        : DateTime.makeUnsafe(
+                            request.resolvedAt ?? request.createdAt ?? Date.now(),
+                          ),
+                  };
+                }),
+              };
             },
             catch: (cause) =>
               new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
@@ -386,7 +471,7 @@ export const makeAdapter = (
 
         rollbackThread: (rollbackInput) =>
           Effect.tryPromise({
-            try: async () => {
+            try: async (): Promise<ProviderAdapter.ProviderAdapterV2ThreadSnapshot> => {
               const task = tasks.get(appThreadId);
               if (!task) throw new Error("no sandbox is bound to this session");
               const checkpointId = rollbackInput.target.checkpointId;
@@ -399,7 +484,7 @@ export const makeAdapter = (
                 providerTurns: turnsFromSnapshot(context, snapshot),
                 messages: [],
                 runtimeRequests: [],
-              } as never;
+              };
             },
             catch: (cause) =>
               new ProviderAdapter.ProviderAdapterRollbackThreadError({
@@ -427,10 +512,20 @@ export const makeAdapter = (
               await refreshCapabilities(forked.taskId);
               const snapshot = await snapshotOf(forked.taskId);
               return threadFromSnapshot(
-                mapperContext(mapper, cwd, capabilities, options, {
-                  providerSessionId: input.providerSessionId,
-                  threadId: forkInput.targetThreadId,
-                }),
+                mapperContext(
+                  mapper,
+                  cwd,
+                  capabilities,
+                  options,
+                  {
+                    providerSessionId: input.providerSessionId,
+                    threadId: forkInput.targetThreadId,
+                  },
+                  runContext,
+                  // A fork is a new provider thread: its identity comes from
+                  // the target thread, not from this session's row.
+                  () => null,
+                ),
                 snapshot,
               );
             },
@@ -461,6 +556,8 @@ const mapperContext = (
   capabilities: OrchestrationV2ProviderCapabilities,
   options: DaytonaAdapterOptions,
   input: { providerSessionId: ProviderSessionId; threadId: ThreadId },
+  runContext: MapperContext["runContext"] = () => ({}),
+  providerThreadId: MapperContext["providerThreadId"] = () => null,
 ) => ({
   driver: DAYTONA_DRIVER_KIND,
   instanceId: options.instanceId as unknown as string,
@@ -468,7 +565,8 @@ const mapperContext = (
   appThreadId: input.threadId as unknown as string,
   cwd,
   capabilities,
-  runContext: () => ({}),
+  runContext,
+  providerThreadId,
 });
 
 const waitForReady = async (

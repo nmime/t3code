@@ -14,7 +14,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   DaytonaBackend,
+  loadDaytonaClient,
   type DaytonaClientLike,
+  type DaytonaSdkLoader,
   type DaytonaSandboxLike,
 } from "../../src/execution/daytona/DaytonaBackend.js";
 import { SandboxBackendUnsupportedError } from "../../src/contracts/errors.js";
@@ -408,4 +410,42 @@ test("a missing sandbox is reported as not found, not as a crash", async () => {
   const client = fakeClient();
   const backend = await DaytonaBackend.create({ client });
   await assert.rejects(() => backend.status("nope"), /Sandbox nope does not exist/);
+});
+
+test("the client is built for the deployment the configuration names", async () => {
+  // A self-hosted Daytona is the same SDK against another API root, so the
+  // endpoint and the region have to reach the constructor — an ignored
+  // `apiUrl` would silently talk to the managed cloud instead.
+  const built: Array<Record<string, unknown>> = [];
+  // Only the constructor matters here: the point is what the deployment
+  // configuration hands it.
+  const loader: DaytonaSdkLoader = async () => ({
+    Daytona: class {
+      constructor(options: unknown) {
+        built.push(options as Record<string, unknown>);
+      }
+    } as unknown as new (options: unknown) => DaytonaClientLike,
+  });
+
+  await loadDaytonaClient(
+    { apiKey: "key", apiUrl: "https://daytona.example.com/api", target: "eu" },
+    loader,
+  );
+  assert.deepEqual(built[0], {
+    apiKey: "key",
+    apiUrl: "https://daytona.example.com/api",
+    target: "eu",
+  });
+
+  // Nothing configured: the SDK's own default (the managed cloud) applies.
+  await loadDaytonaClient({ apiKey: "key" }, loader);
+  assert.deepEqual(built[1], { apiKey: "key" });
+});
+
+test("a missing key is unauthorized, not a connection failure", async () => {
+  const loader: DaytonaSdkLoader = async () => ({ Daytona: class {} as never });
+  await assert.rejects(
+    () => loadDaytonaClient({ apiKey: "" }, loader),
+    /DAYTONA_API_KEY is not set/,
+  );
 });

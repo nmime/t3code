@@ -33,10 +33,32 @@ export interface MapperContext {
   providerSessionId: ProviderSessionId;
   /** The app thread this session serves. */
   appThreadId: string;
+  /**
+   * The identity T3 already holds for this provider thread, when it has one.
+   *
+   * T3 starts a run with a provisional provider-thread row and hands it to the
+   * adapter through `existingProviderThread`; an adapter that mints its own row
+   * instead leaves two rows per app thread. Read through a function because the
+   * row is only known once the run's thread has been ensured.
+   */
+  providerThreadId: () => string | null;
   /** Working directory reported to T3 (the sandbox worktree). */
   cwd: string;
-  /** The turn a run belongs to, for events that arrive without turn context. */
-  runContext: (runId: string | undefined) => { providerTurnId?: string; nodeId?: NodeId };
+  /**
+   * The turn a run belongs to, for events that arrive without turn context.
+   *
+   * The control plane names its runs its own way; T3 owns the run it is
+   * executing, and its ingestor routes an event to the run whose id it
+   * recognizes. `runId` and `attemptId` are that translation: without them a
+   * mapped message or turn is addressed to a run T3 does not know and is
+   * dropped.
+   */
+  runContext: (runId: string | undefined) => {
+    providerTurnId?: string;
+    nodeId?: NodeId;
+    runId?: string;
+    attemptId?: string;
+  };
   /** Reported with session events; the adapter owns the real values. */
   capabilities: OrchestrationV2ProviderCapabilities;
 }
@@ -106,9 +128,11 @@ export class ProviderEventMapper {
 
       case "thread.updated": {
         const reported = record(payload.providerThread);
+        // The thread keeps the identity T3 already has for it; what the worker
+        // reports is its *native* id, which belongs in `nativeThreadRef`.
+        // Re-keying here would record the same thread twice.
         const thread: OrchestrationV2ProviderThread = {
           ...(this.thread ?? emptyThread(this.context)),
-          id: ProviderThreadId.make(text(reported.providerThreadId) || this.context.appThreadId),
           nativeThreadRef: {
             driver: this.context.driver,
             nativeId: text(reported.providerThreadId) || null,
@@ -133,7 +157,8 @@ export class ProviderEventMapper {
           id: providerTurnId,
           providerThreadId: this.thread?.id ?? ProviderThreadId.make(this.context.appThreadId),
           nodeId: context.nodeId ?? NodeId.make(`node_${runId || event.seq}`),
-          runAttemptId: null,
+          // T3 recognizes its own root turn by the attempt it started.
+          runAttemptId: (context.attemptId ?? null) as never,
           nativeTurnRef: {
             driver: this.context.driver,
             nativeId: text(reported.providerTurnId) || null,
@@ -153,22 +178,9 @@ export class ProviderEventMapper {
         const runId = text(payload.runId);
         const role = text(reported.role) === "user" ? "user" : "assistant";
         const chunk = text(reported.text);
-        if (role === "user") {
-          return [
-            {
-              type: "message.updated",
-              driver: this.context.driver,
-              message: this.message({
-                messageId: `user_${runId || event.seq}`,
-                role: "user",
-                text: chunk,
-                runId: runId || null,
-                at: event.ts,
-                streaming: false,
-              }),
-            },
-          ];
-        }
+        // The user's own message is T3's: the app thread created it, and the
+        // control plane is echoing it back. Mapping it would duplicate it.
+        if (role === "user") return [];
         // Assistant text streams: accumulate, and update the same message.
         const key = runId || text(reported.messageId) || String(event.seq);
         const existing = this.streaming.get(key);
@@ -186,7 +198,8 @@ export class ProviderEventMapper {
               messageId: accumulated.messageId,
               role: "assistant",
               text: accumulated.text,
-              runId: runId || null,
+              // The run T3 is executing, not the control plane's own run id.
+              runId: this.context.runContext(runId).runId ?? null,
               at: event.ts,
               streaming: reported.streaming === true,
             }),
@@ -294,7 +307,7 @@ export class ProviderEventMapper {
 }
 
 const emptyThread = (context: MapperContext): OrchestrationV2ProviderThread => ({
-  id: ProviderThreadId.make(context.appThreadId),
+  id: ProviderThreadId.make(context.providerThreadId() ?? context.appThreadId),
   driver: context.driver,
   providerInstanceId: context.instanceId as never,
   providerSessionId: context.providerSessionId,
@@ -318,6 +331,9 @@ export const threadFromSnapshot = (
   const turns = turnsFromSnapshot(context, snapshot);
   return {
     ...emptyThread(context),
+    // One identity per provider thread: the id derived from the app thread, so
+    // a snapshot read and a `thread.updated` event agree and T3 records the
+    // thread once. The worker's own id lives in `nativeThreadRef`.
     providerSessionId: (snapshot.providerSessionId ?? context.providerSessionId) as never,
     nativeThreadRef: snapshot.providerThreadId
       ? { driver: context.driver, nativeId: snapshot.providerThreadId, strength: "strong" }

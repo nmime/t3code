@@ -236,6 +236,9 @@ surfaces — HTTP API and CLI — driven as a Mac/phone client would drive them
 
 ## Documentation
 
+- [`docs/setup.md`](docs/setup.md) — the ordered walkthrough: prerequisites,
+  build, Daytona (cloud or self-hosted), profile, worker bundle, `serve`, the T3
+  instance, the first thread, the verification ladder and troubleshooting.
 - [`docs/t3-integration.md`](docs/t3-integration.md) — which T3 source files this
   replaces or extends, and in what order to do it.
 - [`docs/operations.md`](docs/operations.md) — VPS deployment, Daytona setup,
@@ -325,6 +328,41 @@ Preview links are token-scoped rather than time-limited
 (`PreviewLink.expiresAt === null`); when the sandbox is private, pass the token
 as `X-Daytona-Preview-Token`.
 
+### Self-hosted Daytona
+
+The backend talks to whatever deployment the configuration names, so a
+self-hosted Daytona (the open-source Docker Compose or Helm install) works
+exactly like the managed cloud — only the endpoint and the key change:
+
+```bash
+export DAYTONA_API_URL=https://daytona.example.com/api   # your own deployment
+export DAYTONA_API_KEY=<a key created in that deployment>
+export DAYTONA_TARGET=<region>                           # optional
+node dist/src/cli.js doctor                              # probes the URL and the key
+node dist/src/cli.js serve --state-dir ~/.t3x-daytona --port 8087 \
+  --worker-url https://control-plane.example.com --worker-bundle t3x-worker.tgz
+```
+
+- `--daytona-api-url` and `--daytona-target` override `DAYTONA_API_URL` and
+  `DAYTONA_TARGET` for one run. `serve` prints the endpoint and the target it
+  resolved, so a deployment never has to be guessed from behaviour.
+- The same SDK talks to both: `apiUrl` is an SDK option
+  (`new Daytona({ apiKey, apiUrl, target })`), and nothing in the control plane
+  assumes the cloud's hostnames, regions or images.
+- Snapshots and images come from _your_ deployment. A profile that names a
+  snapshot must name one that exists there; a profile that names none is
+  created from an image, `T3X_DAYTONA_DEFAULT_IMAGE`
+  (default `daytonaio/sandbox:latest` — a self-hosted install usually carries
+  its own tag, e.g. `daytonaio/sandbox:0.9.0`).
+- `t3x doctor` reports the URL, the target and — when a key is set — whether
+  the deployment actually answered, because "the URL is wrong" and "the key is
+  wrong" are otherwise indistinguishable from the outside. It exits non-zero
+  when a check fails.
+- A self-hosted deployment is also the only way to prove the last leg of the
+  remote path end to end (a sandbox dialing the control plane): the sandboxes
+  are on your network, so nothing filters the call the way a restricted-egress
+  tier does.
+
 ### What the tests prove against the real API
 
 `tests/integration/daytonaReal.test.ts` runs only when `DAYTONA_API_KEY` is set
@@ -356,12 +394,17 @@ sandbox is deleted afterwards, including when a check fails. `T3X_SMOKE_KEEP=1`
 leaves it for inspection.
 
 **What those tests still do not prove.** The worker's dial _into_ the control
-plane is not exercised end to end from a real sandbox in a network where the
-control plane is not reachable: the tests stop at that boundary (the run ends
-with `task.worker_attach_failed`). What is proven for that leg is the bundle
-landing and the worker process starting inside the sandbox; the socket itself
-is covered by the local-backend suite, where the worker is a real child process
-over a real WebSocket.
+plane is not exercised from a _remote_ sandbox in a network where the control
+plane is not reachable: on the managed cloud's restricted-egress tier the run
+ends with `task.worker_attach_failed`. What is proven for that leg is the bundle
+landing and the worker process starting inside the sandbox; the socket itself is
+covered by the local-backend suite (a real child process over a real WebSocket)
+and, on the T3 side, by
+`apps/server/src/orchestration-v2/Adapters/DaytonaAdapterV2.e2e.test.ts`, which
+drives a dispatched message all the way through T3's own orchestrator, ingestor
+and projection against a real control plane and a real worker. Anywhere the two
+hosts can reach each other — a VPS, a self-hosted Daytona — it is the same code
+path.
 
 ## License
 

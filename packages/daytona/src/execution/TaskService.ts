@@ -653,7 +653,7 @@ export class TaskService {
         const id = String(message.messageId);
         const existing = messages.findIndex((m) => m.messageId === id);
         const merged = {
-          ...(existing >= 0 ? messages[existing] : {}),
+          ...(existing >= 0 ? messages[existing] : { createdAt: event.ts }),
           ...message,
           // The run belongs to the event, not the chunk: it is what groups the
           // chunks of one reply back into one message.
@@ -667,7 +667,14 @@ export class TaskService {
       if (event.type === "runtime_request.updated" && request) {
         const id = String(request.requestId);
         const existing = runtimeRequests.findIndex((r) => r.requestId === id);
-        const merged = { ...(existing >= 0 ? runtimeRequests[existing] : {}), ...request };
+        const merged = {
+          ...(existing >= 0 ? runtimeRequests[existing] : { createdAt: event.ts }),
+          ...request,
+        };
+        // A request carries no timestamp of its own; the log does.
+        if (typeof merged.status === "string" && merged.status !== "pending") {
+          merged.resolvedAt ??= event.ts;
+        }
         if (existing >= 0) runtimeRequests[existing] = merged;
         else runtimeRequests.push(merged);
       }

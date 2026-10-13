@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -415,4 +415,60 @@ test("HTTP API: checkpoint rollback restores the workspace", async () => {
   } finally {
     await server.stop();
   }
+});
+
+test("CLI: --help anywhere prints usage instead of starting a server", async () => {
+  // `serve --help` used to start a control plane and hang, which is how a
+  // backgrounded process with no output ended up sitting in `ps` for a day.
+  const { stdout } = await run("node", [cli, "serve", "--help"], { cwd: repoRoot });
+  assert.match(stdout, /t3x — T3 Code remote execution control plane/);
+  assert.match(stdout, /DAYTONA_API_URL/);
+});
+
+test("CLI: doctor reports the endpoint it would use, and probes it when it can", async () => {
+  const { stdout } = await run(
+    "node",
+    [cli, "doctor", "--daytona-api-url", "https://daytona.test/api"],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, DAYTONA_API_KEY: "" },
+    },
+  ).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "{}" }));
+  const { checks } = JSON.parse(stdout) as {
+    checks: Array<{ name: string; ok: boolean; detail: string }>;
+  };
+  const url = checks.find((check) => check.name === "daytona api url");
+  assert.ok(url, "doctor names the endpoint");
+  assert.equal(url!.detail, "https://daytona.test/api");
+  // No key, no probe: reachability is only a question a key can answer.
+  assert.equal(
+    checks.some((check) => check.name === "daytona reachable"),
+    false,
+  );
+});
+
+test("CLI: serve resolves the Daytona endpoint from the flag and the environment", async () => {
+  const stateDir = tempStateDir();
+  const child = spawn("node", [
+    cli,
+    "serve",
+    "--state-dir",
+    stateDir,
+    "--port",
+    "0",
+    "--backend",
+    "daytona",
+    "--daytona-api-url",
+    "https://daytona.test/api",
+    "--daytona-target",
+    "eu",
+  ]);
+  let out = "";
+  child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+  // The banner is printed before the server starts serving, and the server
+  // never exits on its own, so the banner is what this test waits for.
+  await waitFor(() => out.includes("daytona target"), 15_000, "the serve banner");
+  child.kill("SIGKILL");
+  assert.match(out, /daytona api:\s+https:\/\/daytona\.test\/api/);
+  assert.match(out, /daytona target: eu/);
 });

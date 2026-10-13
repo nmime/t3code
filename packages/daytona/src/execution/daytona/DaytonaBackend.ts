@@ -138,13 +138,25 @@ export const DAYTONA_SDK_INSTALL_HINT =
   `Install it where the control plane runs: npm install ${DAYTONA_SDK_PACKAGE} ` +
   `(or pnpm add ${DAYTONA_SDK_PACKAGE} --filter @t3tools/daytona).`;
 
-export async function loadDaytonaClient(options: {
-  apiKey: string;
-  apiUrl?: string;
-}): Promise<DaytonaClientLike> {
-  const mod = (await import(/* webpackIgnore: true */ DAYTONA_SDK_PACKAGE as string).catch(
-    () => null,
-  )) as { Daytona?: new (opts: unknown) => DaytonaClientLike } | null;
+/** How the SDK is imported; a test substitutes a module with a fake constructor. */
+export type DaytonaSdkLoader = () => Promise<{
+  Daytona?: new (opts: unknown) => DaytonaClientLike;
+} | null>;
+
+export const importDaytonaSdk: DaytonaSdkLoader = () =>
+  import(/* webpackIgnore: true */ DAYTONA_SDK_PACKAGE as string).catch(() => null) as Promise<{
+    Daytona?: new (opts: unknown) => DaytonaClientLike;
+  } | null>;
+
+export async function loadDaytonaClient(
+  options: {
+    apiKey: string;
+    apiUrl?: string;
+    target?: string;
+  },
+  load: DaytonaSdkLoader = importDaytonaSdk,
+): Promise<DaytonaClientLike> {
+  const mod = await load();
   if (!mod?.Daytona) {
     throw new ExecutionError(
       "sandbox_backend_unsupported",
@@ -159,13 +171,19 @@ export async function loadDaytonaClient(options: {
   }
   return new mod.Daytona({
     apiKey: options.apiKey,
+    // Point the SDK at a self-hosted Daytona instead of the managed cloud.
     ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+    // The default region for sandboxes and snapshots; a per-call target wins.
+    ...(options.target ? { target: options.target } : {}),
   }) as DaytonaClientLike;
 }
 
 export interface DaytonaBackendOptions {
   apiKey?: string;
+  /** API root of the Daytona deployment: `https://app.daytona.io/api` or your own. */
   apiUrl?: string;
+  /** Default region (target) for sandboxes and snapshots. */
+  target?: string;
   client?: DaytonaClientLike;
   defaultAutoStopMinutes?: number;
   /** Image used when a profile names no snapshot (resources then apply). */
@@ -191,6 +209,9 @@ export class DaytonaBackend implements SandboxBackend {
         apiKey: options.apiKey ?? process.env.DAYTONA_API_KEY ?? "",
         ...((options.apiUrl ?? process.env.DAYTONA_API_URL)
           ? { apiUrl: options.apiUrl ?? process.env.DAYTONA_API_URL }
+          : {}),
+        ...((options.target ?? process.env.DAYTONA_TARGET)
+          ? { target: options.target ?? process.env.DAYTONA_TARGET }
           : {}),
       }));
     return new DaytonaBackend(client, options);

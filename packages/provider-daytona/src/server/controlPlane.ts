@@ -39,6 +39,8 @@ export interface DaytonaMessage {
   runId?: string;
   seq?: number;
   streaming?: boolean;
+  /** Epoch milliseconds of the event that first carried this message. */
+  createdAt?: number;
 }
 
 export interface DaytonaRuntimeRequest {
@@ -47,6 +49,10 @@ export interface DaytonaRuntimeRequest {
   summary?: string;
   detail?: { prompt?: string };
   status?: string;
+  /** Epoch milliseconds of the event that first carried this request. */
+  createdAt?: number;
+  /** Epoch milliseconds of the event that resolved it, when it is resolved. */
+  resolvedAt?: number;
 }
 
 export interface DaytonaProviderInventory {
