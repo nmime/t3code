@@ -1,4 +1,4 @@
-apiVersion: t3-daytona/v1
+apiVersion: t3x/v1
 kind: EnvironmentProfile
 metadata:
   name: review-only
@@ -6,7 +6,8 @@ metadata:
   description: Cheap, short-lived sandbox for code review; supervised by default.
 
 runtime:
-  snapshot: node24-dev-v3
+  # Image-backed: every sandbox is a container from $OPENSANDBOX_IMAGE
+  # (deploy/sandbox-image), and these resources become its cgroup limits.
   resources:
     cpu: 2
     memoryGiB: 4

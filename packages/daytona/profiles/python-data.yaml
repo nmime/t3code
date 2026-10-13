@@ -1,4 +1,4 @@
-apiVersion: t3-daytona/v1
+apiVersion: t3x/v1
 kind: EnvironmentProfile
 metadata:
   name: python-data
@@ -6,7 +6,9 @@ metadata:
   description: Python data work with OpenCode pointed at a self-hosted model gateway.
 
 runtime:
-  snapshot: python312-data-v1
+  # Image-backed: every sandbox is a container from $OPENSANDBOX_IMAGE
+  # (deploy/sandbox-image, or your own python image), and these resources
+  # become its cgroup limits.
   resources:
     cpu: 8
     memoryGiB: 16
