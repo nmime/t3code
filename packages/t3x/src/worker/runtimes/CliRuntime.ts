@@ -121,7 +121,12 @@ export class CliRuntime implements WorkerProviderRuntime {
       type: "turn.updated",
       driver: this.driver,
       threadId: payload.threadId,
-      providerTurn: { providerTurnId, runId: payload.runId, status: "running" },
+      providerTurn: {
+        providerTurnId,
+        runId: payload.runId,
+        runOrdinal: payload.runOrdinal,
+        status: "running",
+      },
     });
 
     const prompt = payload.message.text;
@@ -200,7 +205,7 @@ export class CliRuntime implements WorkerProviderRuntime {
           providerThreadId: thread.providerThreadId,
           providerTurnId,
           runId: payload.runId,
-          runOrdinal: 1,
+          runOrdinal: payload.runOrdinal,
           status: this.interruptedRuns.has(payload.runId)
             ? "interrupted"
             : code === 0
@@ -221,7 +226,7 @@ export class CliRuntime implements WorkerProviderRuntime {
           providerThreadId: thread.providerThreadId,
           providerTurnId,
           runId: payload.runId,
-          runOrdinal: 1,
+          runOrdinal: payload.runOrdinal,
           status: "failed",
           threadDisposition: "broken",
           failure: { kind: "spawn_error", message: String(err) },

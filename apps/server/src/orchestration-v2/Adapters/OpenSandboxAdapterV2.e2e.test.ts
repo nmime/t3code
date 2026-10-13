@@ -164,6 +164,21 @@ it.live(
           createdBy: "user",
           creationSource: "web",
         },
+        // A second turn in the same thread: the session is already bound, so
+        // this one does not create anything — it reuses the sandbox the first
+        // turn started. Hosting the app found this failing while a fresh thread
+        // worked, which is why it is here.
+        {
+          type: "message.dispatch",
+          commandId: CommandId.make("dispatch:opensandbox-e2e-2"),
+          threadId,
+          messageId: MessageId.make("message:opensandbox-e2e-2"),
+          text: "hello again from T3",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        },
       ];
       // Steps, not `commands`: when a scenario lists steps the harness runs the
       // commands inside them and ignores the `commands` field entirely.
@@ -173,6 +188,9 @@ it.live(
         steps: [
           { type: "dispatch" as const, command: commands[0]!, await: true },
           { type: "dispatch" as const, command: commands[1]!, await: true },
+          { type: "await_thread_idle" as const, threadId },
+          { type: "dispatch" as const, command: commands[2]!, await: true },
+          { type: "await_thread_idle" as const, threadId },
         ],
         projectionThreadIds: [threadId],
       };
@@ -193,7 +211,8 @@ it.live(
                 `turns=${projection.providerTurns.length} messages=${projection.messages.length} ` +
                 `requests=${JSON.stringify(projection.runtimeRequests.map((request) => request.status))}`,
             );
-            if (projection.messages.length >= 2) return;
+            // Two turns: two user messages and two replies.
+            if (projection.messages.length >= 4) return;
             yield* Effect.sleep(Duration.seconds(1));
           }
         }),
@@ -232,6 +251,28 @@ it.live(
       const items = JSON.stringify([...projection.turnItems.values()]);
       assert.match(items, /"type":"assistant_message"/, "the reply is a transcript item");
       assert.match(items, /echo\[full-access\]: hello from T3/);
+
+      // The second turn in the same thread: the session was already bound, so
+      // nothing new is created — the sandbox the first turn started is reused,
+      // and the reply has to reach the projection all the same. This is the
+      // case a fresh thread never exercises.
+      assert.match(
+        text,
+        /echo\[full-access\]: hello again from T3/,
+        "the second turn's reply is in the projection",
+      );
+      assert.match(items, /echo\[full-access\]: hello again from T3/);
+      assert.equal(
+        projection.providerThreads.length,
+        1,
+        "the second turn reused the thread the first one bound",
+      );
+      const failedRuns = projection.runs.filter((run) => (run.failure ?? null) !== null);
+      assert.deepEqual(
+        failedRuns.map((run) => run.failure),
+        [],
+        "neither turn failed",
+      );
     }),
   120_000,
 );

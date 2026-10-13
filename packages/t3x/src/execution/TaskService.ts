@@ -266,6 +266,15 @@ export class TaskService {
     const runId = newRunId();
     const effectId = newEffectId();
     const commandId = newCommandId();
+    // The turn's position in the task: the number of turns already accepted,
+    // plus this one. It used to count `turn.start` *events*, and the store never
+    // records one — so every turn of every task was ordinal 1, and T3's
+    // projection refused the second turn of a thread with
+    // `UNIQUE constraint failed: ...projection_provider_turns.ordinal`.
+    // A fresh thread never notices; the second message in an existing one did.
+    const turnOrdinal =
+      this.store.eventsSince(taskId, 0, 10_000).filter((e) => e.type === "message.accepted")
+        .length + 1;
 
     this.store.submitCommand({
       commandId,
@@ -290,10 +299,8 @@ export class TaskService {
           payload: {
             taskId,
             runId,
-            runOrdinal:
-              this.store.eventsSince(taskId, 0, 10_000).filter((e) => e.type === "turn.start")
-                .length + 1,
-            providerTurnOrdinal: 1,
+            runOrdinal: turnOrdinal,
+            providerTurnOrdinal: turnOrdinal,
             attemptId: effectId,
             messageId: `msg_${runId}`,
             text: input.text,
