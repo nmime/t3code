@@ -36,6 +36,7 @@ import { normalizeControlPlaneUrl, type OpenSandboxProviderConfig } from "./conf
 import {
   OpenSandboxControlPlane,
   OpenSandboxControlPlaneError,
+  type OpenSandboxEvent,
   type OpenSandboxSnapshot,
   type OpenSandboxTask,
 } from "./controlPlane.ts";
@@ -146,9 +147,14 @@ export const makeAdapter = (
        * as `existingProviderThread`; adopting that identity is what keeps one
        * row per app thread instead of two that alternate as the active thread.
        */
-      let providerThreadIdentity: string | null = null;
-      const adoptProviderThread = (existing: { id: unknown } | undefined): void => {
-        if (existing?.id !== undefined) providerThreadIdentity = String(existing.id);
+      const providerThreadIdentities = new Map<string, string>();
+      const adoptProviderThread = (
+        threadId: string,
+        existing: { id: unknown } | undefined,
+      ): void => {
+        if (existing?.id !== undefined) {
+          providerThreadIdentities.set(threadId, String(existing.id));
+        }
       };
 
       const runContext = (runId: string | undefined) => {
@@ -162,52 +168,113 @@ export const makeAdapter = (
         };
       };
 
-      const mapper = new ProviderEventMapper({
-        driver: OPENSANDBOX_DRIVER_KIND,
-        instanceId: options.instanceId as unknown as string,
-        providerSessionId: input.providerSessionId,
-        appThreadId,
-        cwd,
-        capabilities,
-        runContext,
-        providerThreadId: () => providerThreadIdentity,
-      });
+      /**
+       * One mapper per app thread.
+       *
+       * T3 derives one session per provider instance (`…:shared`), so this
+       * adapter serves every thread of the instance at once. A single mapper
+       * held one provider-thread identity and one set of turns, and mapped every
+       * task's events through it — so the second thread's events were recorded
+       * on the first thread's row.
+       */
+      const mappers = new Map<string, ProviderEventMapper>();
+      const mapperFor = (threadId: string): ProviderEventMapper => {
+        const existing = mappers.get(threadId);
+        if (existing !== undefined) return existing;
+        const created = new ProviderEventMapper({
+          driver: OPENSANDBOX_DRIVER_KIND,
+          instanceId: options.instanceId as unknown as string,
+          providerSessionId: input.providerSessionId,
+          appThreadId: threadId,
+          cwd,
+          capabilities,
+          runContext,
+          providerThreadId: () => providerThreadIdentities.get(threadId) ?? null,
+        });
+        mappers.set(threadId, created);
+        return created;
+      };
+
+      /** The app thread a provider-thread reference belongs to. */
+      const appThreadOf = (providerThread: { appThreadId?: unknown } | undefined): string =>
+        providerThread?.appThreadId === undefined
+          ? appThreadId
+          : String(providerThread.appThreadId);
 
       const taskIdFor = (threadId: string): string | null => tasks.get(threadId)?.taskId ?? null;
 
       // The control plane's stream is the session's event stream: it replays
       // from the sequence the client last saw, so a reconnect loses nothing.
+      //
+      // One stream per task, each in its own fiber. A task's stream does not end
+      // on its own, so reading the tasks one after another — which is what this
+      // did — parks on the first task forever and starves every task after it.
+      // The session is shared across app threads, and T3 only learns a thread's
+      // state from its own task's events, so a second thread never got any: it
+      // sat at "Thinking" while its turn completed on the control plane.
       const streamController = new AbortController();
+      const streaming = new Set<string>();
+      const cursors = new Map<string, number>();
+      /**
+       * Which app thread asked for a runtime request.
+       *
+       * `respondToRuntimeRequest` is handed a request id and nothing else, and
+       * the session serves every thread of the instance, so the thread that owns
+       * the request has to be learned from the stream that carried it.
+       */
+      const requestThreads = new Map<string, string>();
+      const watch = (task: OpenSandboxTask, threadId: string): void => {
+        if (streaming.has(task.taskId)) return;
+        streaming.add(task.taskId);
+        const mapper = mapperFor(threadId);
+        void (async () => {
+          while (!streamController.signal.aborted) {
+            let cursor = cursors.get(task.taskId) ?? 0;
+            // Only the transport is guarded: the cursor makes a reconnect
+            // lossless, but a mapping defect has to fail the session loudly.
+            const stream = client
+              .events(task.taskId, cursor, streamController.signal)
+              [Symbol.asyncIterator]();
+            for (;;) {
+              let step: IteratorResult<OpenSandboxEvent>;
+              try {
+                step = await stream.next();
+              } catch {
+                break;
+              }
+              if (step.done || streamController.signal.aborted) break;
+              const event = step.value;
+              cursor = Math.max(cursor, event.seq);
+              cursors.set(task.taskId, cursor);
+              if (event.type === "turn.updated") {
+                const payload = event.payload.providerTurn as
+                  | { runId?: string; providerTurnId?: string }
+                  | undefined;
+                if (payload?.runId && payload.providerTurnId) {
+                  turnsByRun.set(payload.runId, payload.providerTurnId);
+                }
+              }
+              if (event.type === "runtime_request.updated") {
+                const payload = event.payload.runtimeRequest as { requestId?: string } | undefined;
+                if (payload?.requestId !== undefined) {
+                  requestThreads.set(String(payload.requestId), threadId);
+                }
+              }
+              for (const mapped of mapper.map(event)) {
+                await Effect.runPromise(Queue.offer(events, mapped));
+              }
+            }
+            if (streamController.signal.aborted) return;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+        })();
+      };
       yield* Effect.forkScoped(
         Effect.tryPromise({
           try: async () => {
-            let cursor = 0;
             while (!streamController.signal.aborted) {
-              const watched = [...tasks.values()];
-              if (watched.length === 0) {
-                await new Promise((resolve) => setTimeout(resolve, 100));
-                continue;
-              }
-              for (const task of watched) {
-                for await (const event of client.events(
-                  task.taskId,
-                  cursor,
-                  streamController.signal,
-                )) {
-                  cursor = Math.max(cursor, event.seq);
-                  if (event.type === "turn.updated") {
-                    const payload = event.payload.providerTurn as
-                      | { runId?: string; providerTurnId?: string }
-                      | undefined;
-                    if (payload?.runId && payload.providerTurnId) {
-                      turnsByRun.set(payload.runId, payload.providerTurnId);
-                    }
-                  }
-                  for (const mapped of mapper.map(event)) {
-                    await Effect.runPromise(Queue.offer(events, mapped));
-                  }
-                }
-              }
+              for (const [threadId, task] of tasks) watch(task, threadId);
+              await new Promise((resolve) => setTimeout(resolve, 100));
             }
           },
           catch: (cause) =>
@@ -219,9 +286,9 @@ export const makeAdapter = (
         }),
       );
 
-      const snapshotOf = async (taskId: string): Promise<OpenSandboxSnapshot> => {
+      const snapshotOf = async (taskId: string, threadId: string): Promise<OpenSandboxSnapshot> => {
         const snapshot = await client.snapshot(taskId);
-        mapper.seed(snapshot);
+        mapperFor(threadId).seed(snapshot);
         return snapshot;
       };
 
@@ -248,23 +315,24 @@ export const makeAdapter = (
         ensureThread: (ensureInput) =>
           Effect.tryPromise({
             try: async () => {
-              adoptProviderThread(ensureInput.existingProviderThread);
+              const threadId = String(ensureInput.threadId);
+              adoptProviderThread(threadId, ensureInput.existingProviderThread);
               const task = await ensureTask(
-                ensureInput.threadId as unknown as string,
+                threadId,
                 ensureInput.modelSelection,
                 ensureInput.title,
               );
-              tasks.set(ensureInput.threadId as unknown as string, task);
-              const snapshot = await snapshotOf(task.taskId);
+              tasks.set(threadId, task);
+              const snapshot = await snapshotOf(task.taskId, threadId);
               return threadFromSnapshot(
                 mapperContext(
-                  mapper,
+                  mapperFor(threadId),
                   cwd,
                   capabilities,
                   options,
-                  input,
+                  { providerSessionId: input.providerSessionId, threadId: ensureInput.threadId },
                   runContext,
-                  () => providerThreadIdentity,
+                  () => providerThreadIdentities.get(threadId) ?? null,
                 ),
                 snapshot,
               );
@@ -280,22 +348,22 @@ export const makeAdapter = (
         resumeThread: (resumeInput) =>
           Effect.tryPromise({
             try: async () => {
-              adoptProviderThread(resumeInput.providerThread);
-              const taskId = taskIdFor(appThreadId);
-              if (!taskId) {
-                const task = await ensureTask(appThreadId, input.modelSelection);
-                tasks.set(appThreadId, task);
+              const threadId = appThreadOf(resumeInput.providerThread);
+              adoptProviderThread(threadId, resumeInput.providerThread);
+              if (!taskIdFor(threadId)) {
+                const task = await ensureTask(threadId, input.modelSelection);
+                tasks.set(threadId, task);
               }
-              const snapshot = await snapshotOf(taskIdFor(appThreadId) ?? "");
+              const snapshot = await snapshotOf(taskIdFor(threadId) ?? "", threadId);
               return threadFromSnapshot(
                 mapperContext(
-                  mapper,
+                  mapperFor(threadId),
                   cwd,
                   capabilities,
                   options,
-                  input,
+                  { providerSessionId: input.providerSessionId, threadId: threadId as never },
                   runContext,
-                  () => providerThreadIdentity,
+                  () => providerThreadIdentities.get(threadId) ?? null,
                 ),
                 snapshot,
               );
@@ -303,7 +371,7 @@ export const makeAdapter = (
             catch: (cause) =>
               new ProviderAdapter.ProviderAdapterEnsureThreadError({
                 driver: OPENSANDBOX_DRIVER_KIND,
-                threadId: appThreadId as never,
+                threadId: appThreadOf(resumeInput.providerThread) as never,
                 cause: defectOf(cause),
               }),
           }),
@@ -350,7 +418,7 @@ export const makeAdapter = (
         steerTurn: (steerInput) =>
           Effect.tryPromise({
             try: async () => {
-              const task = tasks.get(appThreadId);
+              const task = tasks.get(appThreadOf(steerInput.providerThread));
               if (!task) throw new Error("no sandbox is bound to this session");
               await client.steer(task.taskId, steerInput.message.text);
             },
@@ -366,7 +434,7 @@ export const makeAdapter = (
         interruptTurn: (interruptInput) =>
           Effect.tryPromise({
             try: async () => {
-              const task = tasks.get(appThreadId);
+              const task = tasks.get(appThreadOf(interruptInput.providerThread));
               if (!task) throw new Error("no sandbox is bound to this session");
               await client.interrupt(task.taskId);
             },
@@ -382,7 +450,9 @@ export const makeAdapter = (
         respondToRuntimeRequest: (requestInput) =>
           Effect.tryPromise({
             try: async () => {
-              const task = tasks.get(appThreadId);
+              const task = tasks.get(
+                requestThreads.get(String(requestInput.requestId)) ?? appThreadId,
+              );
               if (!task) throw new Error("no sandbox is bound to this session");
               await client.respondToApproval(
                 task.taskId,
@@ -406,12 +476,19 @@ export const makeAdapter = (
         readThreadSnapshot: (snapshotInput) =>
           Effect.tryPromise({
             try: async (): Promise<ProviderAdapter.ProviderAdapterV2ThreadSnapshot> => {
-              const taskId =
-                taskIdFor(snapshotInput.providerThread.appThreadId as unknown as string) ??
-                tasks.get(appThreadId)?.taskId;
+              const threadId = appThreadOf(snapshotInput.providerThread);
+              const taskId = taskIdFor(threadId);
               if (!taskId) throw new Error("no sandbox is bound to this session");
-              const snapshot = await snapshotOf(taskId);
-              const context = mapperContext(mapper, cwd, capabilities, options, input);
+              const snapshot = await snapshotOf(taskId, threadId);
+              const context = mapperContext(
+                mapperFor(threadId),
+                cwd,
+                capabilities,
+                options,
+                { providerSessionId: input.providerSessionId, threadId: threadId as never },
+                runContext,
+                () => providerThreadIdentities.get(threadId) ?? null,
+              );
               return {
                 providerThread: threadFromSnapshot(context, snapshot),
                 providerTurns: turnsFromSnapshot(context, snapshot),
@@ -472,13 +549,22 @@ export const makeAdapter = (
         rollbackThread: (rollbackInput) =>
           Effect.tryPromise({
             try: async (): Promise<ProviderAdapter.ProviderAdapterV2ThreadSnapshot> => {
-              const task = tasks.get(appThreadId);
+              const threadId = appThreadOf(rollbackInput.providerThread);
+              const task = tasks.get(threadId);
               if (!task) throw new Error("no sandbox is bound to this session");
               const checkpointId = rollbackInput.target.checkpointId;
               await client.rollback(task.taskId, checkpointId as unknown as string);
               await waitForSettled(client, task.taskId, config.pollIntervalMs ?? 250);
-              const snapshot = await snapshotOf(task.taskId);
-              const context = mapperContext(mapper, cwd, capabilities, options, input);
+              const snapshot = await snapshotOf(task.taskId, threadId);
+              const context = mapperContext(
+                mapperFor(threadId),
+                cwd,
+                capabilities,
+                options,
+                { providerSessionId: input.providerSessionId, threadId: threadId as never },
+                runContext,
+                () => providerThreadIdentities.get(threadId) ?? null,
+              );
               return {
                 providerThread: threadFromSnapshot(context, snapshot),
                 providerTurns: turnsFromSnapshot(context, snapshot),
@@ -503,17 +589,17 @@ export const makeAdapter = (
               if (!capabilities.threads.canForkThread) {
                 throw new Error(`the sandbox worker does not support forking ${agent} threads`);
               }
-              const source = tasks.get(appThreadId);
+              const source = tasks.get(appThreadOf(forkInput.sourceProviderThread));
               if (!source) throw new Error("no sandbox is bound to this session");
               const targetThreadId = forkInput.targetThreadId as unknown as string;
               const forked = await client.forkTask(source.taskId, targetThreadId);
               tasks.set(targetThreadId, forked);
               await waitForReady(client, forked.taskId, config.readyTimeoutMs ?? 300_000);
               await refreshCapabilities(forked.taskId);
-              const snapshot = await snapshotOf(forked.taskId);
+              const snapshot = await snapshotOf(forked.taskId, targetThreadId);
               return threadFromSnapshot(
                 mapperContext(
-                  mapper,
+                  mapperFor(targetThreadId),
                   cwd,
                   capabilities,
                   options,

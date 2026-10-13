@@ -137,6 +137,7 @@ it.live(
       );
 
       const threadId = ThreadId.make("thread:opensandbox-e2e");
+      const secondThreadId = ThreadId.make("thread:opensandbox-e2e-second");
       const projectId = ProjectId.make("project:opensandbox-e2e");
       const commands: ReadonlyArray<OrchestrationV2Command> = [
         {
@@ -179,6 +180,36 @@ it.live(
           createdBy: "user",
           creationSource: "web",
         },
+        // A second thread on the same provider instance. The session is shared,
+        // and the adapter used to read its tasks' event streams one after
+        // another — which parks on the first task forever and leaves every
+        // later thread's events unread. On the hosted app that thread sat at
+        // "Thinking" while its turn completed on the control plane.
+        {
+          type: "thread.create",
+          commandId: CommandId.make("create:opensandbox-e2e-second"),
+          threadId: secondThreadId,
+          projectId,
+          title: "OpenSandbox end to end (second thread)",
+          modelSelection: { instanceId, model: "default" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        },
+        {
+          type: "message.dispatch",
+          commandId: CommandId.make("dispatch:opensandbox-e2e-second"),
+          threadId: secondThreadId,
+          messageId: MessageId.make("message:opensandbox-e2e-second"),
+          text: "hello from the second thread",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        },
       ];
       // Steps, not `commands`: when a scenario lists steps the harness runs the
       // commands inside them and ignores the `commands` field entirely.
@@ -191,15 +222,18 @@ it.live(
           { type: "await_thread_idle" as const, threadId },
           { type: "dispatch" as const, command: commands[2]!, await: true },
           { type: "await_thread_idle" as const, threadId },
+          { type: "dispatch" as const, command: commands[3]!, await: true },
+          { type: "dispatch" as const, command: commands[4]!, await: true },
         ],
-        projectionThreadIds: [threadId],
+        projectionThreadIds: [threadId, secondThreadId],
       };
 
       const result = yield* runOrchestratorV2Scenario(scenario, {
         afterSteps: Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
-          for (let attempt = 0; attempt < 60; attempt++) {
+          for (let attempt = 0; attempt < 90; attempt++) {
             const projection = yield* orchestrator.getThreadProjection(threadId);
+            const second = yield* orchestrator.getThreadProjection(secondThreadId);
             const task = yield* Effect.promise(() =>
               client.findTaskByThread(String(threadId)).catch(() => null),
             );
@@ -209,10 +243,12 @@ it.live(
                 `runs=${JSON.stringify(projection.runs.map((run) => ({ s: run.status, f: run.failure ?? null })))} ` +
                 `sessions=${JSON.stringify(projection.providerSessions.map((session) => ({ d: session.driver, s: session.status })))} ` +
                 `turns=${projection.providerTurns.length} messages=${projection.messages.length} ` +
-                `requests=${JSON.stringify(projection.runtimeRequests.map((request) => request.status))}`,
+                `requests=${JSON.stringify(projection.runtimeRequests.map((request) => request.status))} ` +
+                `secondMessages=${second.messages.length}`,
             );
-            // Two turns: two user messages and two replies.
-            if (projection.messages.length >= 4) return;
+            // Two turns in the first thread (two user messages and two replies)
+            // and one in the second.
+            if (projection.messages.length >= 4 && second.messages.length >= 2) return;
             yield* Effect.sleep(Duration.seconds(1));
           }
         }),
@@ -273,6 +309,20 @@ it.live(
         [],
         "neither turn failed",
       );
+
+      // The second thread, on the same shared provider session: its reply only
+      // exists if the adapter read that task's own event stream.
+      const secondProjection = result.projections.get(secondThreadId);
+      assert.ok(secondProjection, "the second thread has a projection");
+      const secondText = JSON.stringify(secondProjection.messages);
+      assert.match(secondText, /hello from the second thread/, "its message is there");
+      assert.match(
+        secondText,
+        /echo\[full-access\]: hello from the second thread/,
+        "the second thread's reply is in the projection",
+      );
+      const secondItems = JSON.stringify([...secondProjection.turnItems.values()]);
+      assert.match(secondItems, /echo\[full-access\]: hello from the second thread/);
     }),
-  120_000,
+  180_000,
 );
