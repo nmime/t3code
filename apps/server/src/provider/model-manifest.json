@@ -97,7 +97,7 @@
       ]
     },
     {
-      "driver": "daytona",
+      "driver": "opensandbox",
       "t3CodeRange": ">=0.0.45",
       "ranges": [{ "range": ">=0.0.0", "status": "unknown" }]
     }

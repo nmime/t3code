@@ -7,7 +7,7 @@ import {
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
 import { makeProviderClientRegistry } from "@t3tools/provider-core/client";
 import { cursorClient } from "@t3tools/provider-cursor/client";
-import { daytonaClient } from "@t3tools/provider-daytona/client";
+import { openSandboxClient } from "@t3tools/provider-opensandbox/client";
 import { grokClient } from "@t3tools/provider-grok/client";
 import { museClient } from "@t3tools/provider-muse/client";
 import { openCodeClient } from "@t3tools/provider-opencode/client";
@@ -26,7 +26,7 @@ export const providerClients = makeProviderClientRegistry([
     settingsSchema: ClaudeSettings,
   },
   cursorClient,
-  daytonaClient,
+  openSandboxClient,
   grokClient,
   openCodeClient,
   {

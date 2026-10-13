@@ -1,0 +1,38 @@
+{
+  "name": "@t3tools/provider-opensandbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider driver that runs a thread's agent inside an OpenSandbox sandbox, through a @t3tools/t3x control plane.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./server": {
+      "types": "./src/server.ts",
+      "import": "./src/server.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./src/client.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test src/server/*.test.ts",
+    "pretest": "pnpm --filter @t3tools/t3x build"
+  },
+  "dependencies": {
+    "@t3tools/contracts": "workspace:*",
+    "@t3tools/provider-core": "workspace:*",
+    "@t3tools/t3x": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@t3tools/provider-testing": "workspace:*",
+    "@types/node": "catalog:"
+  }
+}

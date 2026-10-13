@@ -20,9 +20,9 @@ import {
 } from "@t3tools/provider-opencode/server";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "@t3tools/provider-pi/server";
 import {
-  DaytonaAdapterV2Driver,
-  type DaytonaAdapterV2DriverEnv,
-} from "@t3tools/provider-daytona/server";
+  OpenSandboxAdapterV2Driver,
+  type OpenSandboxAdapterV2DriverEnv,
+} from "@t3tools/provider-opensandbox/server";
 import type { AnyProviderAdapterDriver } from "@t3tools/provider-core/server/adapterDriver";
 
 export type BuiltInProviderAdapterDriversV2Env =
@@ -33,7 +33,7 @@ export type BuiltInProviderAdapterDriversV2Env =
   | GrokAdapterV2DriverEnv
   | OpenCodeAdapterV2DriverEnv
   | PiAdapterV2DriverEnv
-  | DaytonaAdapterV2DriverEnv;
+  | OpenSandboxAdapterV2DriverEnv;
 
 const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
   AnyProviderAdapterDriver<BuiltInProviderAdapterDriversV2Env>
@@ -44,7 +44,7 @@ const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
   OpenCodeAdapterV2Driver,
   GrokAdapterV2Driver,
   PiAdapterV2Driver,
-  DaytonaAdapterV2Driver,
+  OpenSandboxAdapterV2Driver,
   AcpRegistryAdapterV2Driver,
 ];
 
