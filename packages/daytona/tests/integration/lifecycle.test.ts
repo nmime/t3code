@@ -216,9 +216,11 @@ test("sandbox preview URLs are signed and expiring", async () => {
   const server = await startTestServer({ stateDir });
   try {
     const task = await createTask(server);
-    const url = await server.backend.previewUrl(task.sandboxId!, 5173, 600);
-    assert.match(url, /t3x-preview=[0-9a-f]{32}/);
-    assert.match(url, /exp=\d+/);
+    const link = await server.backend.previewUrl(task.sandboxId!, 5173, 600);
+    assert.match(link.url, /t3x-preview=[0-9a-f]{32}/);
+    assert.match(link.url, /exp=\d+/);
+    assert.equal(link.token, null);
+    assert.ok((link.expiresAt ?? 0) > Math.floor(Date.now() / 1000));
     assert.ok(fs.existsSync(path.join(stateDir, "sandboxes")));
   } finally {
     await server.stop();

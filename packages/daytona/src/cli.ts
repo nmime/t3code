@@ -10,9 +10,23 @@ import { parseArgs } from "node:util";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { ControlPlaneServer, defaultWorkerEntry } from "./execution/ControlPlaneServer.js";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import {
+  ControlPlaneServer,
+  createSandboxBackend,
+  defaultWorkerEntry,
+  type SandboxBackendKind,
+} from "./execution/ControlPlaneServer.js";
 import { parseProfileYaml } from "./contracts/environmentProfile.js";
+import {
+  DAYTONA_SDK_INSTALL_HINT,
+  DAYTONA_SDK_PACKAGE,
+} from "./execution/daytona/DaytonaBackend.js";
+import { DEFAULT_SANDBOX_WORKER_ENTRY } from "./execution/SandboxControlPlane.js";
 import { importLocalConfigs } from "./config-importer/importer.js";
 import { ConfigBundleStore } from "./config-importer/ConfigBundle.js";
 import { errorPayload } from "./contracts/errors.js";
@@ -21,6 +35,9 @@ const USAGE = `t3x — T3 Code remote execution control plane
 
 Usage:
   t3x serve [--state-dir DIR] [--port N] [--api-token TOKEN]
+            [--backend auto|local|daytona] [--worker-url https://host]
+            [--worker-bundle FILE.tgz] [--worker-entry-in-sandbox PATH]
+  t3x worker bundle [--out FILE.tgz]
   t3x profile add --id ID --file FILE.yaml
   t3x profile list
   t3x profile resolve --id ID [--overrides FILE.yaml]
@@ -73,6 +90,8 @@ async function main(): Promise<void> {
       return sandbox(rest);
     case "reconcile":
       return reconcile(rest);
+    case "worker":
+      return worker(rest);
     case "import-config":
       return importConfig(rest);
     case "doctor":
@@ -81,6 +100,75 @@ async function main(): Promise<void> {
       process.stderr.write(`unknown command ${command}\n\n${USAGE}`);
       process.exit(2);
   }
+}
+
+/**
+ * `t3x worker bundle` — pack the worker so a remote sandbox can run it.
+ *
+ * A sandbox has no access to the control plane's filesystem, so the worker
+ * (its compiled entry, the modules it imports and its production dependencies)
+ * has to travel as one archive. `serve --worker-bundle` uploads and extracts it
+ * into every sandbox it provisions.
+ */
+async function worker(args: string[]): Promise<void> {
+  const [sub, ...rest] = args;
+  if (sub !== "bundle") throw new Error(`unknown worker subcommand ${sub}`);
+  const flags = parseFlags(rest);
+  const out = path.resolve(flags.out ?? path.join(process.cwd(), "t3x-worker-bundle.tgz"));
+  // This file is dist/src/cli.js: dist/src is what ships, its parent is the package.
+  const distSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
+  const packageRoot = path.resolve(distSrc, "..", "..");
+  const staging = await fsp.mkdtemp(path.join(os.tmpdir(), "t3x-worker-bundle-"));
+
+  // The tarball root mirrors dist/src, so the entry lands at worker/index.js
+  // and its `../contracts/...` imports resolve inside the same root.
+  await fsp.cp(distSrc, staging, { recursive: true });
+  await fsp.writeFile(
+    path.join(staging, "package.json"),
+    `${JSON.stringify({ name: "t3x-worker-bundle", private: true, type: "module" }, null, 2)}\n`,
+  );
+
+  const manifest = JSON.parse(
+    await fsp.readFile(path.join(packageRoot, "package.json"), "utf8"),
+  ) as {
+    dependencies?: Record<string, string>;
+  };
+  const require = createRequire(import.meta.url);
+  const modulesDir = path.join(staging, "node_modules");
+  await fsp.mkdir(modulesDir, { recursive: true });
+  const packed: string[] = [];
+  for (const name of Object.keys(manifest.dependencies ?? {})) {
+    let entry: string;
+    try {
+      entry = require.resolve(`${name}/package.json`);
+    } catch {
+      throw new Error(`dependency ${name} is not installed; run the package install first`);
+    }
+    const from = path.dirname(entry);
+    const to = path.join(modulesDir, name);
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.cp(from, to, { recursive: true, dereference: true });
+    packed.push(name);
+  }
+
+  await fsp.mkdir(path.dirname(out), { recursive: true });
+  const tar = spawnSync("tar", ["-czf", out, "-C", staging, "."], { stdio: "inherit" });
+  if (tar.status !== 0) throw new Error("tar failed while packing the worker bundle");
+  await fsp.rm(staging, { recursive: true, force: true });
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        bundle: out,
+        bytes: (await fsp.stat(out)).size,
+        dependencies: packed,
+        entryInSandbox: DEFAULT_SANDBOX_WORKER_ENTRY,
+        use: `t3x serve --worker-bundle ${out} --worker-url https://your-vps.example.com`,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 function stateDirFrom(args: string[]): string {
@@ -113,32 +201,40 @@ async function withServer<T>(
 }
 
 async function serve(args: string[]): Promise<void> {
-  const { values } = parseArgs({
-    args,
-    options: {
-      "state-dir": { type: "string" },
-      port: { type: "string" },
-      "api-token": { type: "string" },
-    },
-    strict: false,
-  });
-  const v = values as Record<string, string | undefined>;
-  const stateDir = path.resolve(v["state-dir"] ?? path.join(os.homedir(), ".t3-daytona"));
-  const port = Number(v.port ?? 8087);
-  const apiToken = v["api-token"] ?? process.env.T3X_API_TOKEN ?? null;
+  const flags = parseFlags(args);
+  const stateDir = path.resolve(flags["state-dir"] ?? path.join(os.homedir(), ".t3-daytona"));
+  const port = Number(flags.port ?? 8087);
+  const apiToken = flags["api-token"] ?? process.env.T3X_API_TOKEN ?? null;
+  const backendKind = (flags.backend ?? "auto") as SandboxBackendKind;
+  const backend = await createSandboxBackend({ stateDir, kind: backendKind });
 
   const server = await ControlPlaneServer.start({
     stateDir,
     port,
     apiToken,
+    backend,
     workerEntry: defaultWorkerEntry(),
+    ...(flags["worker-url"] ? { publicWorkerUrl: flags["worker-url"] } : {}),
+    ...(flags["worker-bundle"] ? { workerBundle: path.resolve(flags["worker-bundle"]) } : {}),
+    ...(flags["worker-entry-in-sandbox"]
+      ? { workerEntryInSandbox: flags["worker-entry-in-sandbox"] }
+      : {}),
   });
 
   console.log(`t3x control plane listening on http://127.0.0.1:${server.port}`);
   console.log(`  state dir:    ${stateDir}`);
   console.log(`  worker url:   ${server.workerUrl}`);
-  console.log(`  backend:      ${server.backend.kind}`);
+  console.log(`  backend:      ${server.backend.kind}${backendKind === "auto" ? " (auto)" : ""}`);
+  console.log(
+    `  worker bundle:${flags["worker-bundle"] ? ` ${path.resolve(flags["worker-bundle"])}` : " none (the sandbox must already carry the worker)"}`,
+  );
   console.log(`  api auth:     ${apiToken ? "bearer token required" : "open (development)"}`);
+  if (server.backend.kind === "daytona" && !flags["worker-url"]) {
+    console.log(
+      "  note: no --worker-url given, so sandboxes are told to dial 127.0.0.1 — set it to the\n" +
+        "        control plane's address as reachable from a sandbox (https://host).",
+    );
+  }
 
   await server.recovery.recover();
   const sweep = setInterval(() => {
@@ -387,8 +483,37 @@ async function sandbox(args: string[]): Promise<void> {
     if (sub === "stop" || sub === "destroy") {
       const sandboxId = positional[0];
       if (!sandboxId) throw new Error(`sandbox ${sub} requires a sandbox id`);
-      if (sub === "stop") server.tasks.stopSandbox(sandboxId);
-      else server.tasks.destroySandbox(sandboxId);
+      // A stop that will be refused is refused here, before it is queued: the
+      // client must not be told ok about something the control plane will not do.
+      if (sub === "stop") {
+        const refusal = server.controlPlane.stopRefusal(sandboxId);
+        if (refusal.refused) {
+          if (refusal.reason === "tasks_bound") {
+            server.controlPlane.recordStopRefusal(sandboxId, "cli");
+          }
+          process.stderr.write(
+            `${JSON.stringify(
+              {
+                ok: false,
+                error:
+                  refusal.reason === "sandbox_not_found"
+                    ? "sandbox_not_found"
+                    : "sandbox.stop_refused",
+                sandboxId,
+                taskCount: refusal.taskCount,
+                reason: refusal.reason,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        server.tasks.stopSandbox(sandboxId);
+      } else {
+        server.tasks.destroySandbox(sandboxId);
+      }
       await server.effectWorker.drain();
       console.log(JSON.stringify({ ok: true, sandboxId, action: sub }, null, 2));
       return;
@@ -422,6 +547,15 @@ async function importConfig(args: string[]): Promise<void> {
   );
 }
 
+function sdkInstalled(): boolean {
+  try {
+    createRequire(import.meta.url).resolve(`${DAYTONA_SDK_PACKAGE}/package.json`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function doctor(): Promise<void> {
   const workerEntry = defaultWorkerEntry();
   const checks = [
@@ -437,10 +571,17 @@ async function doctor(): Promise<void> {
     },
     {
       name: "daytona sdk",
-      ok: true,
-      detail: fs.existsSync(path.join(process.cwd(), "node_modules", "@daytona-io"))
-        ? "installed"
-        : "not installed (local backend only)",
+      ok: sdkInstalled(),
+      detail: sdkInstalled()
+        ? `${DAYTONA_SDK_PACKAGE} resolves`
+        : `${DAYTONA_SDK_PACKAGE} not installed (local backend only); ${DAYTONA_SDK_INSTALL_HINT}`,
+    },
+    {
+      name: "daytona api key",
+      ok: Boolean(process.env.DAYTONA_API_KEY),
+      detail: process.env.DAYTONA_API_KEY
+        ? "DAYTONA_API_KEY is set: `serve` picks the Daytona backend automatically"
+        : "DAYTONA_API_KEY is not set: `serve` uses the local backend",
     },
     { name: "git", ok: true, detail: "required inside sandboxes for checkpoints" },
   ];

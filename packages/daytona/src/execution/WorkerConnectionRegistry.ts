@@ -64,6 +64,13 @@ export interface WorkerCommandContext {
   threadId?: string;
   runId?: string;
   timeoutMs?: number;
+  /**
+   * Whether the result is appended to the task's event log (default true).
+   * A turn's commands belong in the log; a one-shot generation that is
+   * explicitly *not* a turn does not, or the log would show a turn that never
+   * happened.
+   */
+  recordResult?: boolean;
 }
 
 export interface WorkerConnectionRegistryOptions {
@@ -83,7 +90,12 @@ export class WorkerConnectionRegistry {
   private readonly bySandbox = new Map<string, Connection>();
   private readonly pending = new Map<
     string,
-    { resolve: (value: unknown) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timer: NodeJS.Timeout;
+      recordResult: boolean;
+    }
   >();
   private readonly eventListeners = new Set<EventListener>();
   private readonly connectionListeners = new Set<ConnectionListener>();
@@ -208,7 +220,12 @@ export class WorkerConnectionRegistry {
           ),
         );
       }, ctx.timeoutMs ?? COMMAND_TIMEOUT_MS_DEFAULT);
-      this.pending.set(envelope.id, { resolve, reject, timer });
+      this.pending.set(envelope.id, {
+        resolve,
+        reject,
+        timer,
+        recordResult: ctx.recordResult !== false,
+      });
       conn.socket.send(encodeEnvelope(envelope), (err) => {
         if (err) {
           clearTimeout(timer);
@@ -494,6 +511,9 @@ export class WorkerConnectionRegistry {
       const payload = frame.payload as Record<string, unknown>;
       const commandId = String(payload.commandId ?? "");
       const entry = this.pending.get(commandId);
+      // A command that asked not to be recorded is answered to its caller and
+      // leaves no trace in the task's log.
+      const record = entry ? entry.recordResult : true;
       if (entry) {
         clearTimeout(entry.timer);
         this.pending.delete(commandId);
@@ -508,12 +528,14 @@ export class WorkerConnectionRegistry {
           );
         }
       }
-      const stored = this.store.appendEvents(taskId, "worker", [
-        { type: "command.result", eventId: frame.id, payload },
-      ]);
-      if (stored.length > 0) {
-        this.ack(connection, stored[stored.length - 1]!.seq);
-        this.emitEvents(stored);
+      if (record) {
+        const stored = this.store.appendEvents(taskId, "worker", [
+          { type: "command.result", eventId: frame.id, payload },
+        ]);
+        if (stored.length > 0) {
+          this.ack(connection, stored[stored.length - 1]!.seq);
+          this.emitEvents(stored);
+        }
       }
       return;
     }

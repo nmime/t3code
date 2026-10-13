@@ -332,7 +332,7 @@ test("HTTP API: snapshot and live turn control", async () => {
 
     // Steering a provider that cannot steer is a typed refusal.
     const unsupported = await post(`/tasks/${taskId}/steer`, { text: "hurry up" });
-    assert.equal(unsupported.status, 400);
+    assert.equal(unsupported.status, 422);
     assert.equal(
       ((await unsupported.json()) as { error: { code: string } }).error.code,
       "capability_unsupported",
@@ -359,7 +359,7 @@ test("HTTP API: snapshot and live turn control", async () => {
     // With no running turn, steer and interrupt are refusals, not silent no-ops.
     for (const route of ["steer", "interrupt"]) {
       const refused = await post(`/tasks/${taskId}/${route}`, { text: "now" });
-      assert.equal(refused.status, 400);
+      assert.equal(refused.status, 409);
       assert.equal(
         ((await refused.json()) as { error: { code: string } }).error.code,
         "task_state_invalid",

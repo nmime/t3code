@@ -42,6 +42,7 @@ import {
 } from "../contracts/sandboxScope.js";
 import type { SandboxBackend, SandboxSpec } from "./daytona/SandboxBackend.js";
 import { LocalBackend } from "./daytona/LocalBackend.js";
+
 import { ExecutionError, WorkerUnavailableError, TaskNotFoundError } from "../contracts/errors.js";
 import { newTaskId, newThreadId, newTokenId, sha256Hex, newEffectId } from "../contracts/ids.js";
 import type { EventStore } from "./EventStore.js";
@@ -53,6 +54,18 @@ import type { ConfigBundleStore } from "../config-importer/ConfigBundle.js";
 import type { WorkerPathMapper } from "./WorkerPathMapper.js";
 import { workerPathMapper } from "./WorkerPathMapper.js";
 import { TaskStateMachine } from "./TaskStateMachine.js";
+
+/**
+ * Where `t3x worker bundle` output is extracted inside a remote sandbox, and
+ * the entry the control plane runs there.
+ *
+ * The default lives under the sandbox user's home, which is the one path a
+ * task is guaranteed to be able to write to; `/workspace` exists on some
+ * images and is read-only on others. `--worker-entry-in-sandbox` overrides it.
+ */
+export const DEFAULT_SANDBOX_WORKER_DIRNAME = ".t3x-worker";
+export const DEFAULT_SANDBOX_WORKER_ROOT = `/home/daytona/${DEFAULT_SANDBOX_WORKER_DIRNAME}`;
+export const DEFAULT_SANDBOX_WORKER_ENTRY = `${DEFAULT_SANDBOX_WORKER_ROOT}/worker/index.js`;
 
 export interface CreateTaskInput {
   profileId: string;
@@ -109,6 +122,16 @@ export interface SandboxControlPlaneDeps {
   workerUrl: string;
   /** Entry script of the execution worker, e.g. dist/src/worker/index.js. */
   workerEntry: string;
+  /**
+   * Tarball of the worker (entry + production dependencies), produced by
+   * `t3x worker bundle`. Remote backends have no access to the control
+   * plane's filesystem, so the worker has to be shipped into the sandbox;
+   * with this set, every remote sandbox gets it extracted before launch and
+   * `workerEntryInSandbox` becomes the entry that is executed.
+   */
+  workerBundle?: string;
+  /** Where the bundle is extracted inside a remote sandbox. */
+  workerEntryInSandbox?: string;
   launcher?: WorkerLauncher;
   workerAttachTimeoutMs?: number;
   /** Global default scope when neither the task nor the project sets one. */
@@ -125,6 +148,9 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   private readonly projects: ProjectSandboxStore;
   private readonly stateDir: string;
   private readonly workerEntry: string;
+  private readonly workerBundle: string | null;
+  private readonly workerEntryInSandbox: string;
+  private readonly workerEntryInSandboxExplicit: boolean;
   private readonly launcher: WorkerLauncher;
   private readonly workerAttachTimeoutMs: number;
   private readonly paths: WorkerPathMapper;
@@ -143,6 +169,9 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     this.stateDir = deps.stateDir;
     this.workerUrl = deps.workerUrl;
     this.workerEntry = deps.workerEntry;
+    this.workerBundle = deps.workerBundle ?? null;
+    this.workerEntryInSandbox = deps.workerEntryInSandbox ?? DEFAULT_SANDBOX_WORKER_ENTRY;
+    this.workerEntryInSandboxExplicit = deps.workerEntryInSandbox !== undefined;
     this.paths = workerPathMapper(deps.backend);
     this.globalDefaultScope = deps.globalDefaultScope ?? DEFAULT_SANDBOX_SCOPE;
     this.launcher =
@@ -441,7 +470,12 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       ...(current.repositoryUrl
         ? { repository: { url: current.repositoryUrl, branch: current.branch } }
         : {}),
-      secrets: secrets.map((s) => ({ name: s.name, value: s.value, inject: s.inject })),
+      secrets: secrets.map((s) => ({
+        name: s.name,
+        value: s.value,
+        inject: s.inject,
+        hostAllowlist: s.hostAllowlist,
+      })),
       stopAfterIdleMinutes: profile.body.sandbox.stopAfterIdleMinutes,
     };
     const secretNames = secrets.map((s) => s.name);
@@ -628,6 +662,10 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   ): Promise<void> {
     const handle = await this.backend.create(spec);
     const projectDir = task.profile.body.project.workingDirectory;
+
+    // A remote sandbox starts empty; the working directory has to exist before
+    // anything is cloned into it.
+    await this.backend.exec(handle.id, `mkdir -p ${shellQuote(projectDir)}`);
 
     this.store.db.tx(() => {
       this.store.updateTask(task.taskId, {
@@ -864,7 +902,9 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     const task = this.store.requireTask(primaryTaskId);
     const projectDir = task.profile.body.project.workingDirectory;
     const workdir = this.paths(sandboxId, projectDir);
-    const stateDir = this.paths(sandboxId, "/workspace/.t3x-state");
+    // The worker's state lives under the sandbox user's home: it is the one
+    // path a remote sandbox is guaranteed to allow writing to.
+    const stateDir = this.paths(sandboxId, `${this.backend.homeDir(sandboxId)}/.t3x-state`);
 
     if (this.backend instanceof LocalBackend) {
       // The worker is spawned with the sandbox's checkout as its cwd, so the
@@ -872,9 +912,11 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       await fsPromises.mkdir(workdir, { recursive: true });
     }
 
+    const entry = await this.ensureRemoteWorker(sandboxId, workdir);
+
     const command = [
       "node",
-      shellQuote(this.workerEntry),
+      shellQuote(entry),
       "--worker-url",
       shellQuote(this.workerUrl),
       "--token",
@@ -896,6 +938,63 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       env: { T3X_TASK_ID: primaryTaskId, T3X_SANDBOX_ID: sandboxId },
       cwd: workdir,
     });
+  }
+
+  /**
+   * Make sure the worker exists inside a remote sandbox and return the entry
+   * to run. The bundle is uploaded once per sandbox (later launches find it
+   * already extracted); the local backend runs the control plane's own copy.
+   */
+  private async ensureRemoteWorker(sandboxId: string, workdir: string): Promise<string> {
+    if (!this.workerBundle || this.backend.kind === "local") return this.workerEntry;
+    const root = this.workerRootInSandbox(sandboxId);
+    const entry = this.workerEntryInSandboxExplicit
+      ? this.workerEntryInSandbox
+      : `${root}/worker/index.js`;
+    const probe = await this.backend.exec(
+      sandboxId,
+      `test -f ${shellQuote(entry)} && echo present`,
+    );
+    if (probe.exitCode === 0 && probe.stdout.includes("present")) return entry;
+
+    const tarball = path.join(this.stateDir, "worker-bundle.tgz");
+    if (path.resolve(tarball) !== path.resolve(this.workerBundle)) {
+      await fsPromises.copyFile(this.workerBundle, tarball);
+    }
+    const bytes = await fsPromises.readFile(tarball);
+    const staged = `${root}/worker-bundle.tgz`;
+    try {
+      await this.backend.exec(sandboxId, `mkdir -p ${shellQuote(root)}`);
+      await this.backend.writeFile(sandboxId, staged, bytes);
+      const extract = await this.backend.exec(
+        sandboxId,
+        `tar -xzf ${shellQuote(staged)} -C ${shellQuote(root)} && rm -f ${shellQuote(staged)}`,
+        { cwd: workdir, timeoutMs: 300_000 },
+      );
+      if (extract.exitCode !== 0) {
+        throw new ExecutionError(
+          "execution_target_unavailable",
+          `Could not unpack the worker bundle in sandbox ${sandboxId}: ${extract.stdout || extract.stderr}`,
+          { sandboxId, entry },
+        );
+      }
+    } catch (err) {
+      throw new ExecutionError(
+        "execution_target_unavailable",
+        `Could not install the worker into sandbox ${sandboxId} at ${root}: ${(err as Error).message}. ` +
+          "Pass --worker-entry-in-sandbox to choose a writable path.",
+        { sandboxId, root, entry },
+      );
+    }
+    return entry;
+  }
+
+  /** The directory the bundle is unpacked into, under the sandbox user's home. */
+  private workerRootInSandbox(sandboxId: string): string {
+    if (this.workerEntryInSandboxExplicit) {
+      return path.posix.dirname(path.posix.dirname(this.workerEntryInSandbox));
+    }
+    return `${this.backend.homeDir(sandboxId)}/${DEFAULT_SANDBOX_WORKER_DIRNAME}`;
   }
 
   async stop(taskId: string): Promise<void> {
@@ -1035,23 +1134,49 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     );
   }
 
+  /**
+   * Whether a sandbox may be stopped right now, and why not if it may not.
+   *
+   * The reference count is the gate: a sandbox with tasks still bound to it is
+   * never stopped, whatever the idle timers say. Clients ask this before
+   * enqueuing a stop so the answer they show the user is the truth; `stopSandbox`
+   * consults it too, so there is exactly one rule.
+   */
+  stopRefusal(sandboxId: string): { refused: boolean; taskCount: number; reason: string | null } {
+    const sandbox = this.projects.getSandbox(sandboxId);
+    if (!sandbox) return { refused: true, taskCount: 0, reason: "sandbox_not_found" };
+    const taskCount = this.projects.taskCount(sandboxId);
+    if (taskCount > 0 || this.sandboxInUse(sandboxId)) {
+      return { refused: true, taskCount, reason: "tasks_bound" };
+    }
+    return { refused: false, taskCount, reason: null };
+  }
+
+  /**
+   * Record that a stop was refused. A client that is told "no" synchronously
+   * (HTTP, CLI) calls this so the sandbox's log still carries the refusal.
+   */
+  recordStopRefusal(sandboxId: string, requestedBy: string): void {
+    this.store.appendEvents(sandboxId, "sandbox", [
+      {
+        type: "sandbox.stop_refused",
+        payload: {
+          sandboxId,
+          reason: "tasks_bound",
+          taskCount: this.projects.taskCount(sandboxId),
+          requestedBy,
+        },
+      },
+    ]);
+  }
+
   async stopSandbox(sandboxId: string, reason = "idle"): Promise<boolean> {
     const sandbox = this.projects.getSandbox(sandboxId);
     if (!sandbox) return false;
     // The reference count is the gate: a sandbox with tasks still bound to it
     // is never stopped, whatever the idle timers say.
     if (this.projects.taskCount(sandboxId) > 0 || this.sandboxInUse(sandboxId)) {
-      this.store.appendEvents(sandboxId, "sandbox", [
-        {
-          type: "sandbox.stop_refused",
-          payload: {
-            sandboxId,
-            reason: "tasks_bound",
-            taskCount: this.projects.taskCount(sandboxId),
-            requestedBy: reason,
-          },
-        },
-      ]);
+      this.recordStopRefusal(sandboxId, reason);
       return false;
     }
     this.registry.dropSandboxConnection(sandboxId, `sandbox stopped: ${reason}`);

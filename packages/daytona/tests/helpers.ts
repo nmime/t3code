@@ -137,7 +137,9 @@ export function sandboxPath(
  * stop/resume of the sandbox.
  */
 export function sandboxStateDir(server: TestServer, sandboxId: string): string {
-  return sandboxPath(server, sandboxId, "/workspace/.t3x-state");
+  // The worker keeps its state under the sandbox user's home, which is the one
+  // path a remote sandbox is guaranteed to allow writing to.
+  return sandboxPath(server, sandboxId, `${server.backend.homeDir(sandboxId)}/.t3x-state`);
 }
 
 /**

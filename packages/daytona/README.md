@@ -73,6 +73,9 @@ Mac GUI / phone GUI / CLI
 npm install
 npm run build
 
+# optional: real sandboxes instead of the local directory backend
+npm install @daytonaio/sdk
+
 # 1. define an environment profile
 cat > profiles/typescript-backend.yaml <<'YAML'
 apiVersion: t3-daytona/v1
@@ -102,8 +105,10 @@ YAML
 # 2. import local agent configuration (Codex / Claude / OpenCode), secrets stripped
 node dist/src/cli.js import-config --home ~ --name mac-config-v1
 
-# 3. run the control plane
-node dist/src/cli.js serve --state-dir ~/.t3-daytona --port 8087
+# 3. run the control plane (Daytona backend automatically when DAYTONA_API_KEY is set)
+node dist/src/cli.js serve --state-dir ~/.t3-daytona --port 8087 \
+  --worker-url https://control-plane.example.com \
+  --worker-bundle t3x-worker.tgz
 
 # 4. create a task (provisions a sandbox and attaches a worker)
 node dist/src/cli.js task create --profile typescript-backend \
@@ -265,12 +270,83 @@ sandbox, while `apps/server/src/git/*` and the checkpoint store are routed
 through `RemoteWorkspaceService` instead of local paths. See
 `docs/t3-integration.md`.
 
-## Daytona
+## Running against real Daytona sandboxes
 
-`DaytonaBackend` maps to the Daytona TypeScript SDK (`@daytona-io/sdk`):
-custom snapshots, resource templates, stop/start, secrets and signed preview
-URLs. Install the SDK and set `DAYTONA_API_KEY` on the VPS to use it; the key is
-never passed into a sandbox or to an agent.
+`DaytonaBackend` maps to the Daytona TypeScript SDK, package name
+**`@daytonaio/sdk`** (verified against 0.224.0): snapshots and images, process
+execution, file transfer, stop/start, organization secrets and port preview
+links.
+
+```bash
+npm install @daytonaio/sdk            # or: pnpm add @daytonaio/sdk --filter @t3tools/daytona
+export DAYTONA_API_KEY=...
+node dist/src/cli.js worker bundle --out t3x-worker.tgz
+node dist/src/cli.js serve --state-dir ~/.t3x-daytona --port 8087 \
+  --worker-url https://control-plane.example.com \
+  --worker-bundle t3x-worker.tgz
+```
+
+With `DAYTONA_API_KEY` set, `serve` picks the Daytona backend on its own
+(`--backend auto`, the default); `--backend local` keeps the directory backend
+for development. `t3x doctor` reports which backend a host would use, and
+whether the SDK resolves.
+
+Three things a real deployment has to get right, each of which is a silent
+failure otherwise:
+
+- **`--worker-url` is the address a sandbox dials.** The default
+  `http://127.0.0.1:<port>/worker` is only correct when the worker runs on the
+  same host as the control plane. Sandboxes dial _out_, so this must be an
+  address reachable from inside a sandbox; the control plane needs no inbound
+  port of its own.
+- **The worker has to exist inside the sandbox.** A sandbox has no access to
+  the control plane's filesystem, so `t3x worker bundle` packs the compiled
+  worker and its production dependencies, and `--worker-bundle` uploads and
+  unpacks it into `<sandbox home>/.t3x-worker` on provisioning. Without it the
+  worker entry points at a path that does not exist in the sandbox.
+- **Snapshots decide the resources.** Creating from a snapshot ignores the
+  profile's `runtime.resources` (the snapshot fixes cpu/memory/disk); the
+  profile's numbers apply only when the profile names no snapshot and the
+  sandbox is built from an image. `runtime.snapshot` must name a snapshot that
+  exists in the organization.
+
+Credentials follow the same rule as the rest of the system — the organization
+API key never enters a sandbox, and never reaches an agent:
+
+- `inject: env` secrets are set as sandbox environment variables at creation;
+- `inject: headers` secrets need a `hostAllowlist` in the profile, and become
+  organization secrets that the platform substitutes on outbound requests to
+  those hosts, so the value never lands in the sandbox's filesystem;
+- Daytona has no API to attach either to a _running_ sandbox, so
+  `injectSecrets` after creation is refused with `sandbox_backend_unsupported`
+  rather than silently doing nothing.
+
+Preview links are token-scoped rather than time-limited
+(`PreviewLink.expiresAt === null`); when the sandbox is private, pass the token
+as `X-Daytona-Preview-Token`.
+
+### What the tests prove against the real API
+
+`tests/integration/daytonaReal.test.ts` runs only when `DAYTONA_API_KEY` is set
+and the SDK resolves, and otherwise reports as skipped:
+
+| Test                       | What it does against real Daytona                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| SDK and authentication     | loads `@daytonaio/sdk` and lists the organization's managed sandboxes                                                                |
+| create, use, destroy       | setup steps, environment variables, file round-trip, `git clone` + `git worktree`, preview link, stop/start retaining files, destroy |
+| control plane provisioning | a task provisions a real sandbox, clones its repository and creates the task's worktree                                              |
+| worker bundle              | `t3x worker bundle` output is uploaded, unpacked and started inside a real sandbox                                                   |
+
+`T3X_DAYTONA_TEST_SNAPSHOT` (default `daytona-small`) selects the snapshot;
+`T3X_DAYTONA_TEST_REPO` the repository the control-plane test clones.
+
+**What those tests still do not prove.** The worker's dial _into_ the control
+plane is not exercised end to end from a real sandbox in a network where the
+control plane is not reachable: the tests stop at that boundary (the run ends
+with `task.worker_attach_failed`). What is proven for that leg is the bundle
+landing and the worker process starting inside the sandbox; the socket itself
+is covered by the local-backend suite, where the worker is a real child process
+over a real WebSocket.
 
 ## License
 

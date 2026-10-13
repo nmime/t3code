@@ -481,7 +481,12 @@ test("HTTP API: projects, sandboxes and the scope toggle", async () => {
     );
 
     // Stopping a sandbox a task still needs is refused, and says why.
-    assert.equal((await post(`/sandboxes/${shared.sandboxId}/stop`)).status, 202);
+    const refusedStop = await post(`/sandboxes/${shared.sandboxId}/stop`);
+    assert.equal(refusedStop.status, 409);
+    assert.equal(
+      ((await refusedStop.json()) as { error: { code: string } }).error.code,
+      "sandbox_stop_refused",
+    );
     await server.effectWorker.drain();
     assert.equal((await server.backend.status(shared.sandboxId)).state, "running");
     assert.ok(

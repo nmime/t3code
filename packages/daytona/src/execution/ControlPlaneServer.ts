@@ -33,6 +33,16 @@ export interface ControlPlaneOptions {
   port?: number;
   backend?: SandboxBackend;
   workerEntry?: string;
+  /**
+   * Address workers must dial, when the control plane is not reachable at
+   * 127.0.0.1 from the sandbox (every remote deployment). An `https://` URL
+   * becomes a `wss://` socket; the path `/worker` is appended.
+   */
+  publicWorkerUrl?: string;
+  /** Tarball of the worker to ship into remote sandboxes (`t3x worker bundle`). */
+  workerBundle?: string;
+  /** Entry the shipped bundle exposes inside the sandbox. */
+  workerEntryInSandbox?: string;
   apiToken?: string | null;
   policy?: unknown;
   /** Global default sandbox scope (default: shared sandbox per project). */
@@ -41,6 +51,35 @@ export interface ControlPlaneOptions {
   autoStartEffects?: boolean;
   launcher?: WorkerLauncher;
   workerAttachTimeoutMs?: number;
+}
+
+/**
+ * Which sandbox backend to run.
+ *
+ * `auto` (the default) uses Daytona when `DAYTONA_API_KEY` is set and the SDK
+ * is installed, and the local directory backend otherwise — so a laptop can
+ * run the control plane with no Daytona account, and a VPS with the key
+ * provisions real sandboxes without a flag.
+ */
+export type SandboxBackendKind = "auto" | "local" | "daytona";
+
+export async function createSandboxBackend(options: {
+  stateDir: string;
+  kind?: SandboxBackendKind;
+  daytona?: { apiKey?: string; apiUrl?: string; defaultAutoStopMinutes?: number };
+}): Promise<SandboxBackend> {
+  const kind = options.kind ?? "auto";
+  if (kind === "local") return new LocalBackend(path.join(options.stateDir, "sandboxes"));
+  const apiKey = options.daytona?.apiKey ?? process.env.DAYTONA_API_KEY ?? "";
+  if (kind === "auto" && !apiKey) return new LocalBackend(path.join(options.stateDir, "sandboxes"));
+  const { DaytonaBackend } = await import("./daytona/DaytonaBackend.js");
+  return await DaytonaBackend.create({
+    apiKey,
+    ...(options.daytona?.apiUrl ? { apiUrl: options.daytona.apiUrl } : {}),
+    ...(options.daytona?.defaultAutoStopMinutes !== undefined
+      ? { defaultAutoStopMinutes: options.daytona.defaultAutoStopMinutes }
+      : {}),
+  });
 }
 
 /** dist/src/execution -> dist/src/worker/index.js */
@@ -65,6 +104,7 @@ export class ControlPlaneServer {
   readonly api: HttpApi;
   readonly httpServer: http.Server;
   readonly stateDir: string;
+  private readonly publicWorkerUrl: string | null;
 
   private constructor(init: {
     store: EventStore;
@@ -82,6 +122,7 @@ export class ControlPlaneServer {
     api: HttpApi;
     httpServer: http.Server;
     stateDir: string;
+    publicWorkerUrl?: string | null;
   }) {
     this.store = init.store;
     this.backend = init.backend;
@@ -98,6 +139,7 @@ export class ControlPlaneServer {
     this.api = init.api;
     this.httpServer = init.httpServer;
     this.stateDir = init.stateDir;
+    this.publicWorkerUrl = init.publicWorkerUrl ?? null;
   }
 
   get port(): number {
@@ -106,7 +148,8 @@ export class ControlPlaneServer {
   }
 
   get workerUrl(): string {
-    return `http://127.0.0.1:${this.port}/worker`;
+    const base = this.publicWorkerUrl ?? `http://127.0.0.1:${this.port}`;
+    return `${base.replace(/\/+$/, "")}/worker`;
   }
 
   static async start(options: ControlPlaneOptions): Promise<ControlPlaneServer> {
@@ -129,6 +172,7 @@ export class ControlPlaneServer {
     const httpServer = http.createServer();
     registry.attach(httpServer, "/worker");
 
+    const workerUrlBase = options.publicWorkerUrl ?? `http://127.0.0.1:${options.port ?? 8087}`;
     const controlPlane = new SandboxControlPlane({
       store,
       backend,
@@ -138,8 +182,12 @@ export class ControlPlaneServer {
       bundles,
       projects,
       stateDir,
-      workerUrl: `http://127.0.0.1:${options.port ?? 8087}/worker`,
+      workerUrl: `${workerUrlBase.replace(/\/+$/, "")}/worker`,
       workerEntry: options.workerEntry ?? defaultWorkerEntry(),
+      ...(options.workerBundle ? { workerBundle: options.workerBundle } : {}),
+      ...(options.workerEntryInSandbox
+        ? { workerEntryInSandbox: options.workerEntryInSandbox }
+        : {}),
       ...(options.globalDefaultScope ? { globalDefaultScope: options.globalDefaultScope } : {}),
       ...(options.launcher ? { launcher: options.launcher } : {}),
       ...(options.workerAttachTimeoutMs
@@ -167,9 +215,13 @@ export class ControlPlaneServer {
       httpServer.listen(options.port ?? 8087, "127.0.0.1", () => resolve());
     });
 
-    // The worker URL must use the actually bound port when port 0 was asked.
+    // A public URL is taken exactly as given; otherwise the URL must use the
+    // actually bound port (the caller may have asked for port 0).
     const bound = (httpServer.address() as AddressInfo).port;
-    controlPlane.workerUrl = `http://127.0.0.1:${bound}/worker`;
+    const workerBase = options.publicWorkerUrl
+      ? options.publicWorkerUrl.replace(/\/+$/, "")
+      : `http://127.0.0.1:${bound}`;
+    controlPlane.workerUrl = `${workerBase}/worker`;
 
     const server = new ControlPlaneServer({
       store,
@@ -187,6 +239,7 @@ export class ControlPlaneServer {
       api,
       httpServer,
       stateDir,
+      publicWorkerUrl: options.publicWorkerUrl ?? null,
     });
 
     if (options.autoStartEffects !== false) effectWorker.start();

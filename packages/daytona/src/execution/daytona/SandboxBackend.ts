@@ -14,6 +14,18 @@
 import type { SandboxHandle, SandboxStatus, WorkspaceEntry } from "../../contracts/execution.js";
 import { SandboxBackendUnsupportedError } from "../../contracts/errors.js";
 
+/**
+ * A credential to materialize for a sandbox. `hostAllowlist` is only
+ * meaningful for `inject: "headers"`, where the backend substitutes the value
+ * on outbound requests to those hosts instead of putting it in the sandbox.
+ */
+export interface SandboxSecret {
+  name: string;
+  value: string;
+  inject: "env" | "headers";
+  hostAllowlist?: string[];
+}
+
 export interface SandboxSpec {
   taskId: string;
   snapshot: string;
@@ -24,8 +36,21 @@ export interface SandboxSpec {
   setup: string[];
   workingDirectory: string;
   repository?: { url: string; branch: string };
-  secrets: Array<{ name: string; value: string; inject: "env" | "headers" }>;
+  secrets: SandboxSecret[];
   stopAfterIdleMinutes: number;
+}
+
+/**
+ * A preview URL for a user-facing port inside a sandbox.
+ *
+ * Backends scope these differently: the local backend signs an expiring URL,
+ * Daytona issues a token-scoped link, so `expiresAt` is null and the caller
+ * must send `token` as `X-Daytona-Preview-Token` when it is not null.
+ */
+export interface PreviewLink {
+  url: string;
+  token: string | null;
+  expiresAt: number | null;
 }
 
 export interface ExecOptions {
@@ -61,10 +86,7 @@ export interface SandboxBackend {
   listDir(sandboxId: string, path: string): Promise<WorkspaceEntry[]>;
 
   /** Inject materialized credentials for the lifetime of the sandbox. */
-  injectSecrets(
-    sandboxId: string,
-    secrets: Array<{ name: string; value: string; inject: "env" | "headers" }>,
-  ): Promise<void>;
+  injectSecrets(sandboxId: string, secrets: SandboxSecret[]): Promise<void>;
 
   /** Agent configuration home (CODEX_HOME / CLAUDE_CONFIG_DIR live under it). */
   homeDir(sandboxId: string): string;
@@ -79,11 +101,10 @@ export interface SandboxBackend {
   ): Promise<void>;
 
   /**
-   * Signed, port-specific, expiring preview URL for user-facing dev servers.
-   * The sandbox-wide preview token grants access to sensitive control ports,
-   * so previews must be scoped and time-limited.
+   * Preview URL for a user-facing port. The sandbox-wide preview token grants
+   * access to sensitive control ports, so previews must be scoped to a port.
    */
-  previewUrl(sandboxId: string, port: number, ttlSeconds: number): Promise<string>;
+  previewUrl(sandboxId: string, port: number, ttlSeconds: number): Promise<PreviewLink>;
 }
 
 export function unsupported(backend: string, operation: string): never {

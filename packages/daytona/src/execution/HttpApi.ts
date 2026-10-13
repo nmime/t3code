@@ -27,6 +27,40 @@ export interface HttpApiDeps {
   apiToken?: string | null;
 }
 
+/**
+ * HTTP status for a control-plane error code, so a client can branch on the
+ * response instead of parsing the body: "already exists" is not the same as
+ * "malformed", and neither is "you are not allowed to".
+ */
+export function statusForErrorCode(code: string): number {
+  switch (code) {
+    case "task_not_found":
+    case "profile_not_found":
+    case "sandbox_not_found":
+    case "secret_not_found":
+      return 404;
+    case "idempotency_conflict":
+    case "sandbox_stop_refused":
+    case "lease_fenced":
+    case "task_state_invalid":
+      return 409;
+    case "unauthorized":
+      return 401;
+    case "secret_policy_violation":
+    case "path_outside_workspace":
+    case "approval_required":
+      return 403;
+    case "capability_unsupported":
+    case "sandbox_backend_unsupported":
+      return 422;
+    case "worker_unavailable":
+    case "execution_target_unavailable":
+      return 503;
+    default:
+      return 400;
+  }
+}
+
 export class HttpApi {
   constructor(private readonly deps: HttpApiDeps) {}
 
@@ -99,9 +133,32 @@ export class HttpApi {
       const sandboxMatch = path.match(/^\/sandboxes\/([^/]+)\/(stop|destroy)$/);
       if (sandboxMatch && method === "POST") {
         const sandboxId = decodeURIComponent(sandboxMatch[1]!);
-        if (sandboxMatch[2] === "stop") this.deps.tasks.stopSandbox(sandboxId);
+        const action = sandboxMatch[2]!;
+        // Stopping is refused while any task is bound to the sandbox: a task
+        // with an approval pending or a dev server running must not lose its
+        // files mid-flight. Say so, instead of answering ok and doing nothing.
+        const refusal = this.deps.controlPlane.stopRefusal(sandboxId);
+        if (action === "stop" && refusal.refused) {
+          if (refusal.reason === "tasks_bound") {
+            this.deps.controlPlane.recordStopRefusal(sandboxId, "client");
+          }
+          return send(res, refusal.reason === "sandbox_not_found" ? 404 : 409, {
+            error: {
+              code:
+                refusal.reason === "sandbox_not_found"
+                  ? "sandbox_not_found"
+                  : "sandbox_stop_refused",
+              message:
+                refusal.reason === "sandbox_not_found"
+                  ? `Sandbox ${sandboxId} does not exist.`
+                  : `Sandbox ${sandboxId} still has ${refusal.taskCount} task(s) bound; it is stopped when the last one leaves.`,
+              details: { sandboxId, taskCount: refusal.taskCount, reason: refusal.reason },
+            },
+          });
+        }
+        if (action === "stop") this.deps.tasks.stopSandbox(sandboxId);
         else this.deps.tasks.destroySandbox(sandboxId);
-        return send(res, 202, { ok: true, sandboxId, action: sandboxMatch[2] });
+        return send(res, 202, { ok: true, sandboxId, action });
       }
 
       if (path === "/tasks") {
@@ -274,9 +331,7 @@ export class HttpApi {
       return send(res, 404, { error: { code: "not_found", message: `${method} ${path}` } });
     } catch (err) {
       const error = errorPayload(err);
-      const status =
-        error.code === "task_not_found" || error.code === "profile_not_found" ? 404 : 400;
-      return send(res, status, { error });
+      return send(res, statusForErrorCode(error.code), { error });
     }
   };
 }

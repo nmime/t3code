@@ -16,7 +16,14 @@ import * as path from "node:path";
 import type { SandboxHandle, SandboxStatus, WorkspaceEntry } from "../../contracts/execution.js";
 import { SandboxNotFoundError, ExecutionError } from "../../contracts/errors.js";
 import { newSandboxId } from "../../contracts/ids.js";
-import type { ExecOptions, ExecResult, SandboxBackend, SandboxSpec } from "./SandboxBackend.js";
+import type {
+  ExecOptions,
+  ExecResult,
+  PreviewLink,
+  SandboxBackend,
+  SandboxSecret,
+  SandboxSpec,
+} from "./SandboxBackend.js";
 
 interface SandboxMeta {
   id: string;
@@ -330,10 +337,7 @@ export class LocalBackend implements SandboxBackend {
     return out.sort((a, b) => (a.name < b.name ? -1 : 1));
   }
 
-  async injectSecrets(
-    sandboxId: string,
-    secrets: Array<{ name: string; value: string; inject: "env" | "headers" }>,
-  ): Promise<void> {
+  async injectSecrets(sandboxId: string, secrets: SandboxSecret[]): Promise<void> {
     const meta = await this.readMeta(sandboxId);
     const file = path.join(this.sandboxDir(sandboxId), "secrets.env");
     const existing = await this.readSecrets(sandboxId);
@@ -387,13 +391,17 @@ export class LocalBackend implements SandboxBackend {
   }
 
   /** Signed, port-scoped, expiring preview URL. */
-  async previewUrl(sandboxId: string, port: number, ttlSeconds: number): Promise<string> {
+  async previewUrl(sandboxId: string, port: number, ttlSeconds: number): Promise<PreviewLink> {
     const meta = await this.readMeta(sandboxId);
     const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
     const sig = createHmac("sha256", meta.previewKey)
       .update(`${sandboxId}:${port}:${exp}`)
       .digest("hex")
       .slice(0, 32);
-    return `http://127.0.0.1:${port}/?t3x-preview=${sig}&sandbox=${sandboxId}&exp=${exp}`;
+    return {
+      url: `http://127.0.0.1:${port}/?t3x-preview=${sig}&sandbox=${sandboxId}&exp=${exp}`,
+      token: null,
+      expiresAt: exp,
+    };
   }
 }

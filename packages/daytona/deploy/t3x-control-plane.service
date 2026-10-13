@@ -7,9 +7,10 @@ Wants=network-online.target
 Type=simple
 User=t3x
 Group=t3x
-WorkingDirectory=/opt/t3-daytona
+WorkingDirectory=/opt/t3code
 EnvironmentFile=/etc/t3x/env
-ExecStart=/usr/bin/node /opt/t3-daytona/dist/src/cli.js serve --state-dir /var/lib/t3x --port 8087
+# --worker-url must be an address a sandbox can dial; --worker-bundle ships the worker into each sandbox
+ExecStart=/usr/bin/node /opt/t3code/packages/daytona/dist/src/cli.js serve --state-dir /var/lib/t3x --port 8087 --worker-url https://control-plane.example.com --worker-bundle /var/lib/t3x/worker.tgz
 Restart=always
 RestartSec=2
 

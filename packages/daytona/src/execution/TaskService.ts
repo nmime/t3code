@@ -137,7 +137,9 @@ export class TaskService {
         prompt: input.prompt,
         ...(input.model ? { model: input.model } : {}),
       },
-      { effectId: newEffectId(), timeoutMs: 15 * 60_000 },
+      // A generation is not a turn: its result must not appear in the task's
+      // event log as one.
+      { effectId: newEffectId(), timeoutMs: 15 * 60_000, recordResult: false },
     );
     const text = (reply as { text?: unknown } | null)?.text;
     if (typeof text !== "string") {

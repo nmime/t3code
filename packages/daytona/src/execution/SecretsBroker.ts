@@ -38,6 +38,8 @@ export interface MaterializedSecret {
   secretRef: string;
   value: string;
   inject: "env" | "headers";
+  /** Hosts a header-injected secret may be substituted for. */
+  hostAllowlist: string[];
 }
 
 export class SecretsBroker {
@@ -123,6 +125,7 @@ export class SecretsBroker {
         secretRef: ref.secretRef,
         value: this.get(ref.secretRef, profileId),
         inject: ref.inject,
+        hostAllowlist: [...ref.hostAllowlist],
       });
     }
     return out;
