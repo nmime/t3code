@@ -225,19 +225,22 @@ domain), so an incompatible task never lands in someone else's sandbox.
 # 1. configuration and reachability
 node packages/daytona/dist/src/cli.js doctor
 
-# 2. real API, real sandboxes (creates and deletes them)
+# 2. the configured endpoint is the one the SDK calls (self-hosted check, no key)
+node --test packages/daytona/dist/tests/integration/selfHosted.test.js
+
+# 3. real API, real sandboxes (creates and deletes them)
 DAYTONA_API_KEY=... node --test packages/daytona/dist/tests/integration/daytonaReal.test.js
 
-# 3. control plane + worker end to end inside one real sandbox (43 checks)
+# 4. control plane + worker end to end inside one real sandbox (43 checks)
 DAYTONA_API_KEY=... node packages/daytona/scripts/sandbox-smoke/run.mjs
 #    T3X_SMOKE_KEEP=1 leaves the sandbox behind
 
-# 4. T3's own orchestration, ingestor and projection over the adapter
+# 5. T3's own orchestration, ingestor and projection over the adapter
 pnpm --filter @t3tools/daytona build
 node_modules/.bin/vp test run apps/server/src/orchestration-v2/Adapters/DaytonaAdapterV2.e2e.test.ts --no-file-parallelism
 ```
 
-Test 4 is the one that proves what the UI shows: a real `thread.create` and
+Test 5 is the one that proves what the UI shows: a real `thread.create` and
 `message.dispatch` through T3's orchestrator, session manager, turn-start
 service, run execution and event ingestor, over the real driver and adapter,
 against a real control plane and a real worker — asserting the reply in T3's own
