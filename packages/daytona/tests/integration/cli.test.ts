@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createTask,
   fakeAgentBinDir,
   startTestServer,
   tempStateDir,
@@ -548,5 +549,56 @@ test("CLI: serve picks the sandbox backend from the flag and the environment", a
       sandbox.close(() => resolve());
       sandbox.closeAllConnections();
     });
+  }
+});
+
+test("CLI: sandbox destroy refuses while a task is bound, and destroys when it is not", async () => {
+  const stateDir = tempStateDir();
+  const server = await startTestServer({ stateDir });
+  try {
+    const task = await createTask(server);
+    const sandboxId = task.sandboxId!;
+
+    // A bound task is a refusal. The command used to answer "ok" and leave the
+    // sandbox running, which is how a container outlives the command that was
+    // supposed to remove it.
+    const refused = await run("node", [
+      cli,
+      "sandbox",
+      "destroy",
+      sandboxId,
+      "--state-dir",
+      stateDir,
+    ]).then(
+      () => ({ code: 0, stderr: "" }),
+      (error: { code?: number; stderr?: string }) => ({
+        code: error.code ?? 1,
+        stderr: error.stderr ?? "",
+      }),
+    );
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, /sandbox\.destroy_refused/);
+    assert.equal(server.projects.getSandbox(sandboxId)?.state, "running");
+    assert.equal(server.projects.taskCount(sandboxId), 1);
+
+    // Release the task, and the same command really removes the sandbox.
+    server.tasks.destroy(task.taskId);
+    await server.effectWorker.drain();
+    const sandboxDir = path.join(stateDir, "sandboxes", sandboxId);
+    assert.ok(fs.existsSync(sandboxDir), "the sandbox directory exists before the destroy");
+
+    const { stdout } = await run("node", [
+      cli,
+      "sandbox",
+      "destroy",
+      sandboxId,
+      "--state-dir",
+      stateDir,
+    ]);
+    assert.match(stdout, /"action": "destroy"/);
+    assert.equal(server.projects.getSandbox(sandboxId)?.state, "deleted");
+    assert.ok(!fs.existsSync(sandboxDir), "the backend really removed it");
+  } finally {
+    await server.stop();
   }
 });

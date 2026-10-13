@@ -1173,6 +1173,25 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   }
 
   /**
+   * Whether a destroy would be refused, asked *before* it is queued.
+   *
+   * Destroying a sandbox with tasks bound to it is refused (their worktrees
+   * live in it), and `destroySandbox` returning false is invisible to a client
+   * that already got a 200 — so the refusal is answered here.
+   */
+  destroyRefusal(sandboxId: string): {
+    refused: boolean;
+    taskCount: number;
+    reason: string | null;
+  } {
+    const sandbox = this.projects.getSandbox(sandboxId);
+    if (!sandbox) return { refused: true, taskCount: 0, reason: "sandbox_not_found" };
+    const taskCount = this.projects.taskCount(sandboxId);
+    if (taskCount > 0) return { refused: true, taskCount, reason: "tasks_bound" };
+    return { refused: false, taskCount, reason: null };
+  }
+
+  /**
    * Record that a stop was refused. A client that is told "no" synchronously
    * (HTTP, CLI) calls this so the sandbox's log still carries the refusal.
    */

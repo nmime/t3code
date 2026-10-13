@@ -195,15 +195,43 @@ function stateDirFrom(args: string[]): string {
   return path.resolve(dir ?? path.join(os.homedir(), ".t3x"));
 }
 
+/**
+ * Run a command against the deployment's own state, with the deployment's own
+ * sandbox backend.
+ *
+ * `ControlPlaneServer.start` falls back to the local directory backend when it
+ * is not handed one — which would make `t3x sandbox destroy` delete a directory
+ * while the real container kept running. Every command goes through here, so
+ * the backend is resolved the same way `serve` resolves it (`--backend`, then
+ * the environment).
+ */
 async function withServer<T>(
   args: string[],
   fn: (server: ControlPlaneServer) => Promise<T>,
   options: { startEffects?: boolean } = {},
 ): Promise<T> {
   const stateDir = stateDirFrom(args);
+  const flags = parseFlags(args);
+  const backendKind = (flags.backend ?? "auto") as SandboxBackendKind;
+  const backend = await createSandboxBackend({
+    stateDir,
+    kind: backendKind,
+    opensandbox: {
+      ...((flags["opensandbox-url"] ?? process.env.OPENSANDBOX_API_URL)
+        ? { baseUrl: flags["opensandbox-url"] ?? process.env.OPENSANDBOX_API_URL }
+        : {}),
+      ...((flags["opensandbox-api-key"] ?? process.env.OPENSANDBOX_API_KEY)
+        ? { apiKey: flags["opensandbox-api-key"] ?? process.env.OPENSANDBOX_API_KEY }
+        : {}),
+      ...((flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE)
+        ? { defaultImage: flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE }
+        : {}),
+    },
+  });
   const server = await ControlPlaneServer.start({
     stateDir,
     port: 0,
+    backend,
     workerEntry: defaultWorkerEntry(),
     autoStartEffects: options.startEffects ?? true,
   });
@@ -543,9 +571,45 @@ async function sandbox(args: string[]): Promise<void> {
         }
         server.tasks.stopSandbox(sandboxId);
       } else {
+        // Destroying is refused while a task is bound, and saying "ok" about a
+        // refusal is how a container outlives the command that removed it.
+        const refusal = server.controlPlane.destroyRefusal(sandboxId);
+        if (refusal.refused) {
+          process.stderr.write(
+            `${JSON.stringify(
+              {
+                ok: false,
+                error:
+                  refusal.reason === "sandbox_not_found"
+                    ? "sandbox_not_found"
+                    : "sandbox.destroy_refused",
+                sandboxId,
+                taskCount: refusal.taskCount,
+                reason: refusal.reason,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
         server.tasks.destroySandbox(sandboxId);
       }
       await server.effectWorker.drain();
+      const record = server.tasks.listSandboxes().find((s) => s.sandboxId === sandboxId);
+      if (sub === "destroy" && record && record.state !== "deleted") {
+        // The effect ran and the record did not move: the backend refused.
+        process.stderr.write(
+          `${JSON.stringify(
+            { ok: false, error: "sandbox_backend_unsupported", sandboxId, state: record.state },
+            null,
+            2,
+          )}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
       console.log(JSON.stringify({ ok: true, sandboxId, action: sub }, null, 2));
       return;
     }
