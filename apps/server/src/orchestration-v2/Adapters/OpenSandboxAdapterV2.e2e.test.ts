@@ -225,6 +225,13 @@ it.live(
         /^echo_/,
         "the provider thread T3 recorded carries the worker's native id",
       );
+
+      // The web UI renders the transcript from turn items, not from messages:
+      // a reply that arrives only as a message reaches the projection and stays
+      // invisible on screen. Found by hosting the app, not by this test.
+      const items = JSON.stringify([...projection.turnItems.values()]);
+      assert.match(items, /"type":"assistant_message"/, "the reply is a transcript item");
+      assert.match(items, /echo\[full-access\]: hello from T3/);
     }),
   120_000,
 );

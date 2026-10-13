@@ -75,6 +75,55 @@ test("the user's own message is not echoed back into T3", () => {
   assert.deepEqual(mapped, [], "the app thread already holds the user's message");
 });
 
+test("an assistant chunk also lands as a transcript item, which is what the UI renders", () => {
+  const mapper = new ProviderEventMapper(context());
+  const mapped = mapper.map(
+    event("message.updated", {
+      runId: "run_cp",
+      message: { messageId: "m1", role: "assistant", text: "hello", streaming: true },
+    }),
+  );
+  const item = mapped.find((candidate) => candidate.type === "turn_item.updated");
+  assert.ok(item, "a message alone reaches the projection and never the transcript");
+  const turnItem = (
+    item as {
+      turnItem: {
+        id: string;
+        type: string;
+        messageId: string;
+        text: string;
+        runId: string;
+        status: string;
+      };
+    }
+  ).turnItem;
+  assert.equal(turnItem.type, "assistant_message");
+  assert.equal(turnItem.messageId, "m1");
+  assert.equal(turnItem.text, "hello");
+  assert.equal(turnItem.runId, "run:app");
+  assert.equal(turnItem.status, "running", "the reply is still streaming");
+
+  // The next chunk updates that same item rather than appending another.
+  const second = mapper.map(
+    event(
+      "message.updated",
+      {
+        runId: "run_cp",
+        message: { messageId: "m1", role: "assistant", text: " there", streaming: false },
+      },
+      2,
+    ),
+  );
+  const secondItem = (
+    second.find((candidate) => candidate.type === "turn_item.updated") as {
+      turnItem: { id: string; text: string; status: string };
+    }
+  ).turnItem;
+  assert.equal(secondItem.id, turnItem.id, "one item per reply, updated in place");
+  assert.equal(secondItem.text, "hello there");
+  assert.equal(secondItem.status, "completed", "the last chunk closes the item");
+});
+
 test("a turn carries the attempt T3 started, so it is the root turn", () => {
   const mapper = new ProviderEventMapper(context());
   const [mapped] = mapper.map(

@@ -20,6 +20,8 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
+  type OrchestrationV2TurnItem,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -190,6 +192,8 @@ export class ProviderEventMapper {
           startedAt: existing?.startedAt ?? event.ts,
         };
         this.streaming.set(key, accumulated);
+        const run = this.context.runContext(runId);
+        const streaming = reported.streaming === true;
         return [
           {
             type: "message.updated",
@@ -199,9 +203,26 @@ export class ProviderEventMapper {
               role: "assistant",
               text: accumulated.text,
               // The run T3 is executing, not the control plane's own run id.
-              runId: this.context.runContext(runId).runId ?? null,
+              runId: run.runId ?? null,
               at: event.ts,
-              streaming: reported.streaming === true,
+              streaming,
+            }),
+          },
+          // T3's v2 transcript is rendered from turn items, not from messages:
+          // a reply that arrives only as `message.updated` reaches the
+          // projection and never shows up in the UI. One item per assistant
+          // message, updated in place as the text streams.
+          {
+            type: "turn_item.updated",
+            driver: this.context.driver,
+            turnItem: this.assistantTurnItem({
+              messageId: accumulated.messageId,
+              text: accumulated.text,
+              runId: run.runId ?? null,
+              providerThreadId: this.thread?.id ?? null,
+              providerTurnId: run.providerTurnId ?? null,
+              at: event.ts,
+              streaming,
             }),
           },
         ];
@@ -303,6 +324,45 @@ export class ProviderEventMapper {
       createdAt: DateTime.makeUnsafe(input.at),
       updatedAt: DateTime.makeUnsafe(input.at),
     };
+  }
+
+  /**
+   * The transcript item T3 renders an assistant reply from.
+   *
+   * `ordinal` is 0 because the ingestor re-derives item positions from the run
+   * it belongs to; the id is derived from the message id so a streamed reply
+   * updates one item instead of appending a new one per chunk.
+   */
+  private assistantTurnItem(input: {
+    messageId: string;
+    text: string;
+    runId: string | null;
+    providerThreadId: string | null;
+    providerTurnId: string | null;
+    at: number;
+    streaming: boolean;
+  }): OrchestrationV2TurnItem {
+    return {
+      id: TurnItemId.make(`turn-item:message:${input.messageId}`) as never,
+      threadId: this.context.appThreadId as never,
+      runId: (input.runId ?? null) as never,
+      nodeId: null,
+      providerThreadId: (input.providerThreadId ?? null) as never,
+      providerTurnId: (input.providerTurnId ?? null) as never,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: input.streaming ? "running" : "completed",
+      title: null,
+      startedAt: DateTime.makeUnsafe(input.at),
+      completedAt: input.streaming ? null : DateTime.makeUnsafe(input.at),
+      updatedAt: DateTime.makeUnsafe(input.at),
+      type: "assistant_message",
+      messageId: input.messageId as never,
+      text: input.text,
+      attachments: [],
+      streaming: input.streaming,
+    } as never;
   }
 }
 
