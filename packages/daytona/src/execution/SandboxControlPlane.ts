@@ -457,7 +457,8 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     );
     const spec: SandboxSpec = {
       taskId,
-      snapshot: profile.body.runtime.snapshot,
+      // "" means "build from the deployment's default image".
+      snapshot: profile.body.runtime.snapshot ?? "",
       platform: profile.body.runtime.platform,
       resources: {
         cpu: profile.body.runtime.resources.cpu,
@@ -688,7 +689,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
             projectId: options.projectId,
             scopeReason: options.reason,
             compatibilityKey: options.compatibilityKey,
-            snapshot: task.profile.body.runtime.snapshot,
+            snapshot: task.profile.body.runtime.snapshot ?? null,
             resources: spec.resources,
             secretNames,
           },
@@ -703,7 +704,8 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
         profileId: task.profileId,
         profileDigest: task.profileDigest,
         compatibilityKey: options.compatibilityKey ?? "",
-        snapshot: task.profile.body.runtime.snapshot,
+        // "" when the sandbox is image-backed rather than built from a snapshot.
+        snapshot: task.profile.body.runtime.snapshot ?? "",
         repositoryUrl: task.repositoryUrl,
         branch: task.branch,
         workspaceRoot: projectDir,

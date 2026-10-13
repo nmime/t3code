@@ -225,7 +225,7 @@ export class ProjectSandboxStore {
       profileId: String(row.profile_id),
       profileDigest: String(row.profile_digest),
       compatibilityKey: String(row.compatibility_key),
-      snapshot: String(row.snapshot),
+      snapshot: row.snapshot == null ? "" : String(row.snapshot),
       repositoryUrl: String(row.repository_url),
       branch: String(row.branch),
       workspaceRoot: String(row.workspace_root),

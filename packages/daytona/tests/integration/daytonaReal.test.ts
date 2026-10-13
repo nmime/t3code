@@ -352,3 +352,33 @@ test("the worker bundle is shipped into a real sandbox and started there", { ski
     if (sandboxId) await backend.destroy(sandboxId).catch(() => undefined);
   }
 });
+
+test(
+  "a sandbox is created from an image when the profile names no snapshot",
+  { skip },
+  async () => {
+    // The path a fresh deployment takes: no snapshot of its own, so the sandbox
+    // is built from an image and the profile's resources are applied directly.
+    const backend = await DaytonaBackend.create({
+      apiKey,
+      defaultAutoStopMinutes: 10,
+      defaultImage: process.env.T3X_DAYTONA_TEST_IMAGE ?? "daytonaio/sandbox:0.9.0",
+    });
+    const handle = await backend.create(spec({ snapshot: "" }));
+    created.push({ backend, id: handle.id });
+    assert.ok(handle.id.length > 0);
+
+    const status = await backend.status(handle.id);
+    assert.equal(status.state, "running");
+    // No snapshot fixed the size, so the resources the profile asked for are the
+    // ones the sandbox reports.
+    assert.equal(status.resources.cpu, 1);
+    assert.equal(status.resources.memoryGiB, 1);
+
+    const ran = await backend.exec(handle.id, "echo image-backed");
+    assert.equal(ran.exitCode, 0);
+    assert.match(ran.stdout, /image-backed/);
+
+    await backend.destroy(handle.id);
+  },
+);

@@ -200,7 +200,8 @@ export function sandboxCompatibilityKey(input: {
       repositoryUrl: input.repositoryUrl,
       profileDigest: input.profile.digest,
       profileId: input.profile.profileId,
-      snapshot: input.profile.body.runtime.snapshot,
+      // An image-backed profile has no snapshot; "" keeps the key stable.
+      snapshot: input.profile.body.runtime.snapshot ?? "",
       platform: input.profile.body.runtime.platform,
       workingDirectory: input.profile.body.project.workingDirectory,
       resources: input.profile.body.runtime.resources,

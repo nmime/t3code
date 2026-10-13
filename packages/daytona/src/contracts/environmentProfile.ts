@@ -59,7 +59,15 @@ export const ProfileBodySchema = z.object({
   }),
   runtime: z.object({
     platform: z.string().default("linux/amd64"),
-    snapshot: z.string().min(1),
+    /**
+     * The snapshot (or image reference) every sandbox of this profile is built
+     * from. Optional: with no snapshot the backend creates the sandbox from
+     * the deployment's default image (`T3X_DAYTONA_DEFAULT_IMAGE`, or
+     * `daytonaio/sandbox:latest`) and sends `resources` directly — which is
+     * what a fresh deployment with no snapshots of its own wants. A snapshot
+     * fixes cpu/memory/disk, so `resources` are ignored when one is named.
+     */
+    snapshot: z.string().min(1).optional(),
     resources: ResourcesSchema.default({}),
   }),
   project: z

@@ -87,7 +87,11 @@ export class EnvironmentProfileService {
   resolveForTask(input: ResolveForTaskInput): ResolvedProfile {
     const stored = this.getProfile(input.profileId);
     const layers: ProfileLayer[] = [
-      { source: "base", name: stored.body.runtime.snapshot, patch: basePatch(stored.body) },
+      {
+        source: "base",
+        name: stored.body.runtime.snapshot ?? "default-image",
+        patch: basePatch(stored.body),
+      },
       {
         source: "global",
         name: `${input.profileId}@${stored.digest.slice(0, 8)}`,
@@ -140,6 +144,11 @@ function basePatch(body: ProfileBody): ProfileLayer["patch"] {
   return {
     apiVersion: body.apiVersion,
     kind: body.kind,
-    runtime: { platform: body.runtime.platform, snapshot: body.runtime.snapshot },
+    runtime: {
+      platform: body.runtime.platform,
+      // Omitted (not `undefined`) so an image-backed profile does not shadow a
+      // snapshot a later layer adds.
+      ...(body.runtime.snapshot ? { snapshot: body.runtime.snapshot } : {}),
+    },
   } as ProfileLayer["patch"];
 }

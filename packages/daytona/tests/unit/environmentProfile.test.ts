@@ -170,3 +170,32 @@ test("warns about macOS-specific setup steps", () => {
   });
   assert.ok(resolved.warnings.some((w) => w.includes("macOS-specific")));
 });
+
+test("runtime.snapshot is optional: an image-backed profile parses and resolves", () => {
+  const parsed = parseProfile({
+    ...(base as unknown as Record<string, unknown>),
+    runtime: { resources: { cpu: 2, memoryGiB: 4 } },
+  });
+  assert.equal(parsed.runtime.snapshot, undefined);
+  // Defaults still apply, so the backend has resources to send with the image.
+  assert.deepEqual(parsed.runtime.resources, { cpu: 2, memoryGiB: 4, diskGiB: 20 });
+
+  const resolved = resolveProfile({
+    profileId: "image-backed",
+    layers: [
+      {
+        source: "global",
+        name: "g",
+        patch: {
+          apiVersion: "t3-daytona/v1",
+          kind: "EnvironmentProfile",
+          metadata: { name: "image-backed", version: 1 },
+          runtime: { resources: { cpu: 2, memoryGiB: 4 } },
+        } as never,
+      },
+    ],
+  });
+  assert.equal(resolved.body.runtime.snapshot, undefined);
+  assert.ok(resolved.digest.length > 0);
+  assert.ok(verifyProfileDigest(resolved, resolved.digest));
+});

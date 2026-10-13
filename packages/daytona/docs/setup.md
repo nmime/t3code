@@ -99,8 +99,12 @@ apiVersion: t3-daytona/v1
 kind: EnvironmentProfile
 metadata: { name: typescript-backend, version: 1 }
 runtime:
-  snapshot: daytona-medium # a snapshot your deployment has; omit to use an image
-  # resources only apply when no snapshot is named:
+  # A snapshot this deployment has, or an image reference it can resolve
+  # (`daytonaio/sandbox:0.9.0`). Omit the key entirely — a fresh deployment
+  # with no snapshots of its own does — and every sandbox is built from
+  # T3X_DAYTONA_DEFAULT_IMAGE, with `resources` applied directly.
+  snapshot: daytona-medium
+  # resources are used only when no snapshot is named:
   # resources: { cpu: 2, memoryGiB: 4, diskGiB: 8 }
 project:
   workingDirectory: /home/daytona/project # must be writable by the sandbox user
@@ -123,7 +127,10 @@ node packages/daytona/dist/src/cli.js profile resolve --id typescript-backend
 Two rules that fail quietly when missed: `project.workingDirectory` must be
 writable by the sandbox user (`/workspace` is read-only on some images), and a
 snapshot fixes cpu/memory/disk, so `runtime.resources` only apply when the
-profile names no snapshot.
+profile names no snapshot. Both forms are supported — `runtime.snapshot` is
+optional, and without it the sandbox comes from `T3X_DAYTONA_DEFAULT_IMAGE`
+(`daytonaio/sandbox:latest` by default), which is what you want on a fresh
+deployment that has no snapshots yet.
 
 ## 4. Pack the worker and serve
 

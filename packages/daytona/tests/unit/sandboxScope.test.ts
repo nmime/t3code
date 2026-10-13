@@ -163,3 +163,18 @@ test("worktrees live beside the base checkout and on their own branch", () => {
   assert.equal(worktreePathFor("/workspace/project", "task_1"), "/workspace/worktrees/task_1");
   assert.equal(worktreeBranchFor("task_1"), "t3x/task_1");
 });
+
+test("an image-backed profile gets a stable key of its own", () => {
+  const repo = "git@example.com:team/backend.git";
+  const imageBacked = profile({ runtime: { resources: { cpu: 2, memoryGiB: 4 } } });
+  assert.equal(imageBacked.body.runtime.snapshot, undefined);
+  const key = (p: typeof imageBacked) =>
+    sandboxCompatibilityKey({ profile: p, repositoryUrl: repo });
+  // Stable: two tasks of the same image-backed profile share one sandbox...
+  assert.equal(
+    key(imageBacked),
+    key(profile({ runtime: { resources: { cpu: 2, memoryGiB: 4 } } })),
+  );
+  // ...and a snapshot-backed task never lands in it.
+  assert.notEqual(key(imageBacked), key(profile()));
+});
