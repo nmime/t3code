@@ -14,8 +14,8 @@
  */
 
 import * as path from "node:path";
-import { LocalBackend } from "./daytona/LocalBackend.js";
-import type { SandboxBackend } from "./daytona/SandboxBackend.js";
+import { LocalBackend } from "./backends/local/LocalBackend.js";
+import type { SandboxBackend } from "./backends/SandboxBackend.js";
 
 export type WorkerPathMapper = (sandboxId: string | null, sandboxPath: string) => string;
 

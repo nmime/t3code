@@ -40,8 +40,8 @@ import {
   type SandboxScope,
   type SandboxScopeReason,
 } from "../contracts/sandboxScope.js";
-import type { SandboxBackend, SandboxSpec } from "./daytona/SandboxBackend.js";
-import { LocalBackend } from "./daytona/LocalBackend.js";
+import type { SandboxBackend, SandboxSpec } from "./backends/SandboxBackend.js";
+import { LocalBackend } from "./backends/local/LocalBackend.js";
 
 import { ExecutionError, WorkerUnavailableError, TaskNotFoundError } from "../contracts/errors.js";
 import { newTaskId, newThreadId, newTokenId, sha256Hex, newEffectId } from "../contracts/ids.js";
@@ -69,9 +69,18 @@ export const DEFAULT_SANDBOX_WORKER_ENTRY = `${DEFAULT_SANDBOX_WORKER_ROOT}/work
 
 export interface CreateTaskInput {
   profileId: string;
-  repositoryUrl: string;
+  /**
+   * The repository the task works on. Optional: a client with no repository (a
+   * scratch thread) omits it, and the task gets an empty workspace root. It is
+   * bound into SQLite, so it is normalized rather than left undefined.
+   */
+  repositoryUrl?: string;
   branch?: string;
-  provider: string;
+  /**
+   * The agent to run. Optional: omitted means the profile's own default
+   * (`agents.defaults.provider`), then the first agent the profile allows.
+   */
+  provider?: string;
   providerInstanceId?: string;
   model?: string;
   permissionMode?: "supervised" | "auto";
@@ -176,7 +185,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     this.globalDefaultScope = deps.globalDefaultScope ?? DEFAULT_SANDBOX_SCOPE;
     this.launcher =
       deps.launcher ??
-      (deps.backend.kind === "daytona"
+      (deps.backend.kind === "opensandbox"
         ? new SandboxWorkerLauncher(deps.backend)
         : new ProcessWorkerLauncher());
     this.workerAttachTimeoutMs = deps.workerAttachTimeoutMs ?? 30_000;
@@ -209,25 +218,34 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
   // -- task creation -------------------------------------------------------
 
   createTask(input: CreateTaskInput): TaskRecord {
+    // Normalize before anything is resolved or written: `undefined` reaches
+    // SQLite as a bind error ("cannot be bound to SQLite parameter"), not as a
+    // default, and both of these are genuinely optional at the API boundary.
+    const repositoryUrl = input.repositoryUrl ?? "";
     const resolved = this.profiles.resolveForTask({
       profileId: input.profileId,
-      repositoryUrl: input.repositoryUrl,
+      repositoryUrl,
       ...(input.projectPatch
         ? { projectPatch: input.projectPatch as never, projectName: "project" }
         : {}),
       ...(input.taskOverrides ? { taskOverrides: input.taskOverrides as never } : {}),
     });
+    const provider =
+      input.provider ??
+      resolved.body.agents.defaults.provider ??
+      resolved.body.agents.allowed[0] ??
+      "echo";
 
     // Scope is decided once, here, so a later change of any default cannot
     // migrate a task that is already running.
     const knownProject =
       (input.projectId ? this.projects.getProject(input.projectId) : null) ??
-      this.projects.findProjectByRepository(input.repositoryUrl);
+      this.projects.findProjectByRepository(repositoryUrl);
     const resolution = resolveSandboxScope({
       requested: input.scope,
       project: knownProject,
       profile: resolved,
-      repositoryUrl: input.repositoryUrl,
+      repositoryUrl,
       globalDefault: this.globalDefaultScope,
     });
 
@@ -236,7 +254,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       const project = this.projects.upsertProject({
         ...(knownProject ? { projectId: knownProject.projectId } : {}),
         ...(input.projectName ? { name: input.projectName } : {}),
-        repositoryUrl: input.repositoryUrl,
+        repositoryUrl,
         environmentProfileId: knownProject?.environmentProfileId ?? input.profileId,
       });
       projectId = project.projectId;
@@ -265,8 +283,8 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       profileId: input.profileId,
       profileDigest: resolved.digest,
       profile: resolved,
-      provider: input.provider,
-      providerInstanceId: input.providerInstanceId ?? `${input.provider}-default`,
+      provider,
+      providerInstanceId: input.providerInstanceId ?? `${provider}-default`,
       model: input.model ?? "default",
       permissionMode:
         input.permissionMode ?? resolved.body.agents.defaults.permissionMode ?? "supervised",
@@ -275,7 +293,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       workspaceRoot: resolved.body.project.workingDirectory,
       worktreePath: "",
       worktreeBranch: "",
-      repositoryUrl: input.repositoryUrl,
+      repositoryUrl,
       branch: input.branch ?? "main",
       leaseEpoch: 0,
       lastEventSequence: 0,
@@ -294,7 +312,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       kind: "task.create",
       payload: {
         profileId: input.profileId,
-        repositoryUrl: input.repositoryUrl,
+        repositoryUrl,
         scope: resolution.scope,
         projectId,
       },
@@ -308,7 +326,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
             provider: record.provider,
             providerInstanceId: record.providerInstanceId,
             model: record.model,
-            executionTarget: "daytona",
+            executionTarget: "sandbox",
             sandboxScope: resolution.scope,
             scopeReason: resolution.reason,
             projectId,
@@ -573,7 +591,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       sandboxId: sandbox.sandboxId,
       workspaceRoot: sandbox.workspaceRoot,
       executionTarget: {
-        kind: "daytona",
+        kind: "sandbox",
         taskId: task.taskId,
         sandboxId: sandbox.sandboxId,
         environmentProfileVersion: `${task.profileId}#${task.profileDigest.slice(0, 12)}`,
@@ -673,7 +691,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
         sandboxId: handle.id,
         workspaceRoot: projectDir,
         executionTarget: {
-          kind: "daytona",
+          kind: "sandbox",
           taskId: task.taskId,
           sandboxId: handle.id,
           environmentProfileVersion: `${task.profileId}#${task.profileDigest.slice(0, 12)}`,
@@ -1387,9 +1405,14 @@ export class ProcessWorkerLauncher implements WorkerLauncher {
 }
 
 /**
- * Launcher for Daytona-backed tasks: the worker command is executed *inside*
- * the sandbox (detached), because the worker must live where the repository,
- * provider processes and MCP servers live.
+ * Launcher for sandbox-backed tasks: the worker command is executed *inside*
+ * the sandbox, because the worker must live where the repository, provider
+ * processes and MCP servers live.
+ *
+ * A backend that can start a detached command does so (`execDetached`): the
+ * OpenSandbox `/command` call is request-scoped, and a `nohup … &` that
+ * returns before the process is reparented can be reaped with the call. The
+ * shell fallback is kept for backends that only expose a blocking exec.
  */
 export class SandboxWorkerLauncher implements WorkerLauncher {
   constructor(private readonly backend: SandboxBackend) {}
@@ -1401,6 +1424,13 @@ export class SandboxWorkerLauncher implements WorkerLauncher {
     env: Record<string, string>;
     cwd: string;
   }): Promise<void> {
+    if (this.backend.execDetached) {
+      await this.backend.execDetached(input.sandboxId, input.command, {
+        cwd: input.cwd,
+        env: input.env,
+      });
+      return;
+    }
     await this.backend.exec(
       input.sandboxId,
       `nohup ${input.command} > /tmp/t3x-worker.log 2>&1 &`,

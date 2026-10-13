@@ -1,5 +1,5 @@
 [Unit]
-Description=t3x control plane (T3 Code + Daytona task sandboxes)
+Description=t3x control plane (T3 Code + OpenSandbox task sandboxes)
 After=network-online.target
 Wants=network-online.target
 
@@ -14,8 +14,9 @@ ExecStart=/usr/bin/node /opt/t3code/packages/daytona/dist/src/cli.js serve --sta
 Restart=always
 RestartSec=2
 
-# The control plane needs to reach the Daytona API and the sandboxes it creates,
-# nothing else. Credentials live in /etc/t3x/env (0600, owner t3x).
+# The control plane needs to reach the sandbox lifecycle server (and, through
+# it, the sandboxes it creates) and nothing else. Credentials live in
+# /etc/t3x/env (0600, owner t3x).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

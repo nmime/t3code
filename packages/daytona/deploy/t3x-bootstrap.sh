@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# t3x-bootstrap.sh - install the T3 Code + Daytona control plane on a VPS.
+# t3x-bootstrap.sh - install the T3 Code control plane and its sandbox provider
+# (OpenSandbox) on a VPS.
 #
 # Idempotent: re-running updates the checkout, repacks the worker and restarts
 # the service. Nothing is deleted, and an existing web server on :80/:443 is
 # never overwritten - the script says so and leaves it alone.
 #
 # Usage
-#   DAYTONA_API_KEY=dtn_xxx ./t3x-bootstrap.sh                 # Daytona cloud
-#   DAYTONA_API_KEY=xxx DAYTONA_API_URL=https://daytona.example.com/api \
-#     DAYTONA_TARGET=eu ./t3x-bootstrap.sh                     # self-hosted Daytona
-#   DOMAIN=t3x.example.com ./t3x-bootstrap.sh                  # own name + real cert
+#   ./t3x-bootstrap.sh                                          # <ip>.sslip.io
+#   DOMAIN=t3x.example.com SANDBOX_DOMAIN=sandbox.example.com ./t3x-bootstrap.sh
 #
-# Variables (all optional except a Daytona key, and only for the Daytona backend)
-#   DAYTONA_API_KEY      organization API key
-#   DAYTONA_API_URL      API root of the deployment (default: Daytona cloud)
-#   DAYTONA_TARGET       default region
+# Variables (all optional)
 #   DOMAIN               public name for the control plane (default: <ip>.sslip.io)
+#   SANDBOX_DOMAIN       public name for the sandbox API (default: sandbox.$DOMAIN)
+#   OPENSANDBOX_API_KEY  key the sandbox server requires (default: generated)
+#   OPENSANDBOX_API_URL  skip the local install and use this server instead
+#   IMAGE                sandbox image to build and use (default: t3x-sandbox:latest)
 #   T3X_API_TOKEN        bearer token T3 must present (default: generated)
 #   REPO_URL, REPO_BRANCH, APP_DIR, STATE_DIR, PORT, PROFILE_ID, AGENT,
-#   SNAPSHOT, IMAGE, TLS=auto|caddy|nginx|none, SKIP_FIREWALL=1
+#   SNAPSHOT, TLS=auto|caddy|nginx|none, SKIP_FIREWALL=1
+#
+# Docker and Python >= 3.10 are the only prerequisites the script does not
+# install itself: it will not put a container runtime on a host that already
+# runs somebody's production containers.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -27,13 +31,18 @@ REPO_URL="${REPO_URL:-https://github.com/nmime/t3code}"
 REPO_BRANCH="${REPO_BRANCH:-feat/daytona-sandboxes}"
 APP_DIR="${APP_DIR:-/opt/t3code}"
 STATE_DIR="${STATE_DIR:-/var/lib/t3x}"
-SDK_DIR="${SDK_DIR:-/opt/t3x-sdk}"
+SANDBOX_DIR="${SANDBOX_DIR:-/opt/opensandbox}"
+SANDBOX_STATE_DIR="${SANDBOX_STATE_DIR:-/var/lib/opensandbox}"
+SANDBOX_ETC_DIR="${SANDBOX_ETC_DIR:-/etc/opensandbox}"
+SANDBOX_SERVICE_USER="${SANDBOX_SERVICE_USER:-osb}"
 ETC_DIR="/etc/t3x"
 ENV_FILE="$ETC_DIR/env"
 PORT="${PORT:-8087}"
 PROFILE_ID="${PROFILE_ID:-default}"
 AGENT="${AGENT:-echo}"
-IMAGE="${IMAGE:-daytonaio/sandbox:0.9.0}"
+IMAGE="${IMAGE:-t3x-sandbox:latest}"
+OPENSANDBOX_SERVER_VERSION="${OPENSANDBOX_SERVER_VERSION:-1.1.1}"
+OPENSANDBOX_EXECD_TAG="${OPENSANDBOX_EXECD_TAG:-release-1.1.1}"
 SERVICE_USER="t3x"
 # The monorepo's engines field wants ^24.13.1; the control plane itself needs
 # >=22.5.0. 24 satisfies both.
@@ -54,8 +63,9 @@ log "host: ${PRETTY_NAME:-unknown} $(uname -m) | $(nproc) vcpu | $(awk '/MemTota
 PUBLIC_IP="${PUBLIC_IP:-$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)}"
 [ -n "$PUBLIC_IP" ] || die "could not determine the public IP; pass PUBLIC_IP=..."
 DOMAIN="${DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
+SANDBOX_DOMAIN="${SANDBOX_DOMAIN:-sandbox.$DOMAIN}"
 WORKER_URL="${WORKER_URL:-https://$DOMAIN}"
-log "public ip $PUBLIC_IP | control plane url $WORKER_URL"
+log "public ip $PUBLIC_IP | control plane url $WORKER_URL | sandbox api https://$SANDBOX_DOMAIN"
 
 # --------------------------------------------------------- 1. base packages ---
 log "base packages"
@@ -101,17 +111,121 @@ $PNPM install --filter "@t3tools/daytona..." --filter "." --ignore-scripts --chi
 log "building the control plane"
 $PNPM --filter @t3tools/daytona build
 
-# ------------------------------------------- 3. the Daytona SDK (runtime) ---
-# Loaded dynamically, so it only has to be resolvable from the built package.
-# Kept out of the checkout so the working tree stays clean.
-log "Daytona SDK"
-if [ ! -d "$SDK_DIR/node_modules/@daytonaio/sdk" ]; then
-  mkdir -p "$SDK_DIR"
-  ( cd "$SDK_DIR" && npm init -y >/dev/null 2>&1 && npm install --no-audit --no-fund @daytonaio/sdk >/dev/null )
+# --------------------------------------------- 3. the sandbox provider ---
+# OpenSandbox (Apache-2.0): a lifecycle REST API plus an agent (execd) injected
+# into each sandbox container. The Docker runtime runs the sandboxes on this
+# host, which is why a worker inside one can dial the control plane.
+log "sandbox provider: OpenSandbox"
+have docker || die "docker is required for the sandbox runtime; install it first (curl -fsSL https://get.docker.com | sh)"
+
+if [ -z "${OPENSANDBOX_API_URL:-}" ]; then
+  if ! have uv; then
+    log "installing uv"
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+  fi
+  if [ ! -x "$SANDBOX_DIR/venv/bin/opensandbox-server" ]; then
+    log "installing opensandbox-server $OPENSANDBOX_SERVER_VERSION"
+    uv venv --python 3.12 "$SANDBOX_DIR/venv"
+    uv pip install --python "$SANDBOX_DIR/venv/bin/python" "opensandbox-server==$OPENSANDBOX_SERVER_VERSION"
+  fi
+  chmod -R a+rX "$SANDBOX_DIR"
+
+  log "pulling the execd image"
+  docker pull "opensandbox/execd:$OPENSANDBOX_EXECD_TAG"
+
+  log "building the sandbox image $IMAGE"
+  docker build -t "$IMAGE" "$APP_DIR/packages/daytona/deploy/sandbox-image"
+
+  log "sandbox server user, config and unit"
+  id -u "$SANDBOX_SERVICE_USER" >/dev/null 2>&1 || \
+    useradd --system --home "$SANDBOX_STATE_DIR" --shell /usr/sbin/nologin "$SANDBOX_SERVICE_USER"
+  usermod -aG docker "$SANDBOX_SERVICE_USER"
+  mkdir -p "$SANDBOX_ETC_DIR" "$SANDBOX_STATE_DIR"
+
+  prev_key() { [ -f "$SANDBOX_ETC_DIR/api-key" ] && cat "$SANDBOX_ETC_DIR/api-key" || true; }
+  OPENSANDBOX_API_KEY="${OPENSANDBOX_API_KEY:-$(prev_key)}"
+  OPENSANDBOX_API_KEY="${OPENSANDBOX_API_KEY:-$(openssl rand -hex 32)}"
+  printf '%s' "$OPENSANDBOX_API_KEY" > "$SANDBOX_ETC_DIR/api-key"
+  chmod 600 "$SANDBOX_ETC_DIR/api-key"
+
+  cat > "$SANDBOX_ETC_DIR/sandbox.toml" <<EOF
+# OpenSandbox lifecycle server - written by t3x-bootstrap.sh.
+# docs: https://github.com/opensandbox-group/OpenSandbox
+[server]
+host = "127.0.0.1"
+port = 8080
+api_key = "$OPENSANDBOX_API_KEY"
+eip = "$SANDBOX_DOMAIN"
+max_sandbox_timeout_seconds = 86400
+
+[proxy]
+resolve_internal = true
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:$OPENSANDBOX_EXECD_TAG"
+
+[store]
+type = "sqlite"
+path = "$SANDBOX_STATE_DIR/opensandbox.db"
+
+[docker]
+network_mode = "bridge"
+port_range_min = 40000
+port_range_max = 40200
+# Sandbox ports stay on loopback: the only way in is the server's own proxy.
+publish_host = "127.0.0.1"
+no_new_privileges = true
+pids_limit = 2048
+
+[ingress]
+mode = "direct"
+EOF
+  chmod 640 "$SANDBOX_ETC_DIR/sandbox.toml"
+  chown root:docker "$SANDBOX_ETC_DIR/sandbox.toml"
+
+  cat > /etc/systemd/system/opensandbox.service <<EOF
+[Unit]
+Description=OpenSandbox lifecycle server (sandbox provider for t3x)
+Documentation=https://github.com/opensandbox-group/OpenSandbox
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=$SANDBOX_SERVICE_USER
+Group=docker
+Environment=HOME=$SANDBOX_STATE_DIR
+Environment=SANDBOX_CONFIG_PATH=$SANDBOX_ETC_DIR/sandbox.toml
+ExecStart=$SANDBOX_DIR/venv/bin/opensandbox-server --config $SANDBOX_ETC_DIR/sandbox.toml
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=$SANDBOX_STATE_DIR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable -q opensandbox
+  systemctl restart opensandbox
+  sleep 4
+  systemctl is-active -q opensandbox || { journalctl -u opensandbox -n 40 --no-pager || true; die "opensandbox did not start"; }
+  chown -R "$SANDBOX_SERVICE_USER:$SANDBOX_SERVICE_USER" "$SANDBOX_STATE_DIR"
+  log "sandbox server up on 127.0.0.1:8080"
+  curl -fsS http://127.0.0.1:8080/health && echo || warn "the sandbox server /health did not answer"
+else
+  log "using the sandbox server at $OPENSANDBOX_API_URL (no local install)"
+  OPENSANDBOX_API_KEY="${OPENSANDBOX_API_KEY:-}"
 fi
-mkdir -p "$APP_DIR/packages/daytona/node_modules/@daytonaio"
-ln -sfn "$SDK_DIR/node_modules/@daytonaio/sdk" "$APP_DIR/packages/daytona/node_modules/@daytonaio/sdk"
-log "@daytonaio/sdk $(node -p "require('$SDK_DIR/node_modules/@daytonaio/sdk/package.json').version")"
 
 # ------------------------------------------------- 4. service user + env ---
 log "service user and environment"
@@ -119,27 +233,29 @@ id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$STATE_DIR" --
 mkdir -p "$ETC_DIR" "$STATE_DIR"
 
 prev() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | head -1 || true; }
-DAYTONA_API_KEY="${DAYTONA_API_KEY:-$(prev DAYTONA_API_KEY)}"
-DAYTONA_API_URL="${DAYTONA_API_URL:-$(prev DAYTONA_API_URL)}"
-DAYTONA_TARGET="${DAYTONA_TARGET:-$(prev DAYTONA_TARGET)}"
-T3X_DAYTONA_DEFAULT_IMAGE="${T3X_DAYTONA_DEFAULT_IMAGE:-$(prev T3X_DAYTONA_DEFAULT_IMAGE)}"
-T3X_DAYTONA_DEFAULT_IMAGE="${T3X_DAYTONA_DEFAULT_IMAGE:-$IMAGE}"
+OPENSANDBOX_API_URL="${OPENSANDBOX_API_URL:-$(prev OPENSANDBOX_API_URL)}"
+OPENSANDBOX_API_URL="${OPENSANDBOX_API_URL:-https://$SANDBOX_DOMAIN}"
+OPENSANDBOX_API_KEY="${OPENSANDBOX_API_KEY:-$(prev OPENSANDBOX_API_KEY)}"
+OPENSANDBOX_IMAGE="${OPENSANDBOX_IMAGE:-$(prev OPENSANDBOX_IMAGE)}"
+OPENSANDBOX_IMAGE="${OPENSANDBOX_IMAGE:-$IMAGE}"
+OPENSANDBOX_PUBLIC_URL="${OPENSANDBOX_PUBLIC_URL:-$(prev OPENSANDBOX_PUBLIC_URL)}"
+OPENSANDBOX_PUBLIC_URL="${OPENSANDBOX_PUBLIC_URL:-$OPENSANDBOX_API_URL}"
 T3X_API_TOKEN="${T3X_API_TOKEN:-$(prev T3X_API_TOKEN)}"
 T3X_API_TOKEN="${T3X_API_TOKEN:-$(openssl rand -hex 32)}"
 
 cat > "$ENV_FILE" <<EOF
 # t3x control plane environment - read by systemd (t3x.service). Keep it 0600.
-DAYTONA_API_KEY=$DAYTONA_API_KEY
-DAYTONA_API_URL=$DAYTONA_API_URL
-DAYTONA_TARGET=$DAYTONA_TARGET
-T3X_DAYTONA_DEFAULT_IMAGE=$T3X_DAYTONA_DEFAULT_IMAGE
+OPENSANDBOX_API_URL=$OPENSANDBOX_API_URL
+OPENSANDBOX_API_KEY=$OPENSANDBOX_API_KEY
+OPENSANDBOX_IMAGE=$OPENSANDBOX_IMAGE
+OPENSANDBOX_PUBLIC_URL=$OPENSANDBOX_PUBLIC_URL
 T3X_API_TOKEN=$T3X_API_TOKEN
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 # doctor reads them from the environment; systemd reads them from the file.
-export DAYTONA_API_KEY DAYTONA_API_URL DAYTONA_TARGET T3X_DAYTONA_DEFAULT_IMAGE T3X_API_TOKEN
-[ -n "$DAYTONA_API_KEY" ] || warn "DAYTONA_API_KEY is empty - the control plane will fall back to the local backend. Put the key in $ENV_FILE and: systemctl restart t3x"
+export OPENSANDBOX_API_URL OPENSANDBOX_API_KEY OPENSANDBOX_IMAGE OPENSANDBOX_PUBLIC_URL T3X_API_TOKEN
+[ -n "$OPENSANDBOX_API_KEY" ] || warn "OPENSANDBOX_API_KEY is empty - the server must be unauthenticated, or the control plane falls back to the local backend"
 
 # -------------------------------------------------- 5. worker + profile ---
 log "packing the worker bundle"
@@ -152,15 +268,15 @@ if [ ! -f "$PROFILE_FILE" ]; then
     RUNTIME_BLOCK="  # Snapshot every sandbox of this profile is built from.
   snapshot: $SNAPSHOT"
   else
-    RUNTIME_BLOCK="  # No snapshot: sandboxes come from \$T3X_DAYTONA_DEFAULT_IMAGE
-  # ($IMAGE) and these resources are applied directly.
+    RUNTIME_BLOCK="  # No snapshot: sandboxes are built from \$OPENSANDBOX_IMAGE
+  # ($IMAGE) and these resources become the container's limits.
   resources:
     cpu: 2
     memoryGiB: 4
     diskGiB: 10"
   fi
   cat > "$PROFILE_FILE" <<EOF
-apiVersion: t3-daytona/v1
+apiVersion: t3x/v1
 kind: EnvironmentProfile
 metadata:
   name: $PROFILE_ID
@@ -169,7 +285,7 @@ metadata:
 runtime:
 $RUNTIME_BLOCK
 project:
-  workingDirectory: /home/daytona/project
+  workingDirectory: /workspace/project
   setup: []
 environment:
   CI: "true"
@@ -276,15 +392,67 @@ server {
 EOF
     ln -sfn /etc/nginx/sites-available/t3x.conf /etc/nginx/sites-enabled/t3x.conf
   fi
+  # The sandbox API needs its own public name: it is what T3 talks to for
+  # preview links and what the worker bundle is uploaded through.
+  if [ ! -f /etc/nginx/sites-available/sandbox.conf ]; then
+    cat > /etc/nginx/sites-available/sandbox.conf <<EOF
+# OpenSandbox lifecycle server ($SANDBOX_DOMAIN) -> 127.0.0.1:8080.
+# Written by t3x-bootstrap.sh; certbot rewrites this file to add the
+# certificate, exactly as it does for the other vhosts on this machine.
+upstream opensandbox_api {
+    server 127.0.0.1:8080;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $SANDBOX_DOMAIN;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+
+    location / {
+        proxy_pass http://opensandbox_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade           \$http_upgrade;
+        proxy_set_header Connection        \$connection_upgrade;
+        client_max_body_size 512m;
+        client_body_timeout  300s;
+        proxy_request_buffering off;
+        proxy_buffering         off;
+        proxy_read_timeout      3600s;
+        proxy_send_timeout      3600s;
+    }
+}
+EOF
+    ln -sfn /etc/nginx/sites-available/sandbox.conf /etc/nginx/sites-enabled/sandbox.conf
+  fi
+  # \$connection_upgrade has to exist somewhere inside the http block.
+  if ! grep -rqs "connection_upgrade" /etc/nginx/conf.d/ /etc/nginx/nginx.conf; then
+    cat > /etc/nginx/conf.d/00-upgrade-map.conf <<'MAP'
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+MAP
+  fi
+
   nginx -t || die "nginx config is broken - nothing was reloaded"
   systemctl reload nginx
-  if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-    certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect --keep-until-expiring 2>&1 | tail -6
-    nginx -t && systemctl reload nginx
-  else
-    log "certificate for $DOMAIN already present"
-  fi
+  for name in "$DOMAIN" "$SANDBOX_DOMAIN"; do
+    if [ ! -d "/etc/letsencrypt/live/$name" ]; then
+      certbot --nginx -d "$name" --non-interactive --agree-tos --redirect --keep-until-expiring 2>&1 | tail -4
+      nginx -t && systemctl reload nginx
+    else
+      log "certificate for $name already present"
+    fi
+  done
   curl -fsS "https://$DOMAIN/health" >/dev/null && log "https://$DOMAIN answers" || warn "https://$DOMAIN/health did not answer"
+  curl -fsS "https://$SANDBOX_DOMAIN/health" >/dev/null && log "https://$SANDBOX_DOMAIN answers" || warn "https://$SANDBOX_DOMAIN/health did not answer"
 }
 
 case "$TLS" in
@@ -310,7 +478,13 @@ cat <<EOF
 
 --------------------------------------------------------------------------
 Done. Control plane: $WORKER_URL  (local http://127.0.0.1:$PORT)
+Sandbox API: $OPENSANDBOX_API_URL  (image $OPENSANDBOX_IMAGE)
 State: $STATE_DIR   Env: $ENV_FILE   Profile: $PROFILE_ID   Worker: $STATE_DIR/worker.tgz
+
+Sandbox server:
+  systemctl status opensandbox | journalctl -u opensandbox -f
+  curl -s $OPENSANDBOX_API_URL/health
+  curl -s -H "OPEN-SANDBOX-API-KEY: $OPENSANDBOX_API_KEY" $OPENSANDBOX_API_URL/v1/sandboxes
 
 Reachability check from anywhere that can see this host:
   curl -s $WORKER_URL/health

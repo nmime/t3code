@@ -5,7 +5,7 @@
  *
  *   execution target routing  !=  provider selection
  *
- * `executionTarget` decides *where* a task runs (local machine or a Daytona
+ * `executionTarget` decides *where* a task runs (this machine or a remote
  * sandbox); `providerInstanceId` decides *which agent* runs there.
  */
 
@@ -23,7 +23,7 @@ export type { TaskExecutionBinding, SandboxScope } from "./sandboxScope.js";
 export type ExecutionTarget =
   | { kind: "local" }
   | {
-      kind: "daytona";
+      kind: "sandbox";
       taskId: string;
       sandboxId: string;
       environmentProfileVersion: string;
@@ -255,14 +255,14 @@ export interface ProviderRuntimePort {
 export interface SandboxHandle {
   id: string;
   taskId: string;
-  backend: "local" | "daytona";
+  backend: "local" | "opensandbox";
   workspaceRoot: string;
 }
 
 export interface SandboxStatus {
   id: string;
   taskId: string | null;
-  backend: "local" | "daytona";
+  backend: "local" | "opensandbox";
   state: "creating" | "running" | "stopped" | "paused" | "deleted";
   createdAt: number;
   autoStopAt: number | null;

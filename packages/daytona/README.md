@@ -2,7 +2,7 @@
 
 A provider-agnostic remote execution system for T3 Code: an always-on **VPS
 control plane** that owns conversation state, task orchestration, environment
-profiles, secrets and scheduling, and **Daytona sandboxes** that own the
+profiles, secrets and scheduling, and **sandbox containers** that own the
 repository, the agent process, MCP servers, Git and tests.
 
 It lives in this repository as a workspace package. T3 reaches it through
@@ -16,14 +16,17 @@ Run it: `pnpm --filter @t3tools/daytona build && node packages/daytona/dist/src/
 
 A provider-agnostic remote execution system for [T3 Code](https://github.com/pingdotgg/t3code):
 an always-on **VPS control plane** that owns conversation state, task
-orchestration, environment profiles, secrets and scheduling, and **Daytona
-sandboxes** that own the repository, the agent process, MCP servers, Git and
-tests. By default a project shares **one sandbox per repository**, and each task
+orchestration, environment profiles, secrets and scheduling, and **sandbox
+containers** that own the repository, the agent process, MCP servers, Git and
+tests. The sandboxes come from a self-hosted **OpenSandbox** lifecycle server
+(the Docker runtime), reached over its HTTP API — see
+[Sandbox provider](#sandbox-provider-opensandbox). By default a project shares
+**one sandbox per repository**, and each task
 gets its own **git worktree** inside it; a task can opt out and run in a sandbox
 of its own (see [Sandbox scope](#sandbox-scope)).
 
 This repository implements the architecture described in the technical report
-_"T3 Code + VPS + Daytona task sandboxes"_, section by section.
+_"T3 Code + VPS + task sandboxes"_, section by section.
 
 ```
 Mac GUI / phone GUI / CLI
@@ -38,7 +41,7 @@ Mac GUI / phone GUI / CLI
 └───────────────┬─────────────────────────────────────────────┘
                 │  authenticated outbound WebSocket, per sandbox
                 ▼
-┌────────────── Daytona sandbox (per project, or per task) ───┐
+┌───────────── sandbox container (per project, or per task) ──┐
 │ execution worker (one per sandbox, many tasks bound to it)  │
 │   provider runtimes (Codex / Claude / OpenCode / Pi / echo) │
 │   base checkout + one git worktree per task                 │
@@ -74,11 +77,13 @@ npm install
 npm run build
 
 # optional: real sandboxes instead of the local directory backend
-npm install @daytonaio/sdk
+export OPENSANDBOX_API_URL=https://sandbox.example.com   # opensandbox-server
+export OPENSANDBOX_API_KEY=...
+export OPENSANDBOX_IMAGE=t3x-sandbox:latest
 
 # 1. define an environment profile
 cat > profiles/typescript-backend.yaml <<'YAML'
-apiVersion: t3-daytona/v1
+apiVersion: t3x/v1
 kind: EnvironmentProfile
 metadata: { name: typescript-backend, version: 3 }
 runtime:
@@ -105,8 +110,8 @@ YAML
 # 2. import local agent configuration (Codex / Claude / OpenCode), secrets stripped
 node dist/src/cli.js import-config --home ~ --name mac-config-v1
 
-# 3. run the control plane (Daytona backend automatically when DAYTONA_API_KEY is set)
-node dist/src/cli.js serve --state-dir ~/.t3-daytona --port 8087 \
+# 3. run the control plane (the sandbox backend is picked up from OPENSANDBOX_API_URL)
+node dist/src/cli.js serve --state-dir ~/.t3x --port 8087 \
   --worker-url https://control-plane.example.com \
   --worker-bundle t3x-worker.tgz
 
@@ -174,7 +179,7 @@ Two cases produce a dedicated sandbox even when the scope says `project`:
   why, so the client can show the toggle as "forced for this task".
 
 Lifecycle is **reference counted**, and the control plane drives it explicitly —
-Daytona's idle timer is never the thing that decides:
+the provider's own idle timer is never the thing that decides:
 
 - `ProjectSandboxStore.attachTask` on provision, `releaseTask` on stop, destroy
   or completion; the sandbox record carries the count.
@@ -237,14 +242,17 @@ surfaces — HTTP API and CLI — driven as a Mac/phone client would drive them
 ## Documentation
 
 - [`docs/setup.md`](docs/setup.md) — the ordered walkthrough: prerequisites,
-  build, Daytona (cloud or self-hosted), profile, worker bundle, `serve`, the T3
-  instance, the first thread, the verification ladder and troubleshooting.
+  build, the OpenSandbox server and sandbox image, profile, worker bundle,
+  `serve`, the T3 instance, the first thread, the verification ladder and
+  troubleshooting.
 - [`docs/t3-integration.md`](docs/t3-integration.md) — which T3 source files this
   replaces or extends, and in what order to do it.
-- [`docs/operations.md`](docs/operations.md) — VPS deployment, Daytona setup,
-  credentials, recovery and troubleshooting.
+- [`docs/operations.md`](docs/operations.md) — VPS deployment, sandbox-server
+  setup, credentials, recovery and troubleshooting.
 - [`profiles/`](profiles) — example environment profiles.
 - [`deploy/t3x-control-plane.service`](deploy/t3x-control-plane.service) — systemd unit.
+- [`deploy/sandbox-image/Dockerfile`](deploy/sandbox-image/Dockerfile) — the image
+  every sandbox is built from.
 - [`deploy/ci.yml`](deploy/ci.yml) — GitHub Actions workflow (copy to
   `.github/workflows/ci.yml`; pushing a workflow file needs a token with the
   `workflow` scope).
@@ -254,7 +262,7 @@ surfaces — HTTP API and CLI — driven as a Mac/phone client would drive them
 ```
 src/contracts/          execution · environmentProfile · workerProtocol · errors
 src/execution/          control plane (VPS side)
-src/execution/daytona/  SandboxBackend, LocalBackend, DaytonaBackend
+src/execution/backends/ SandboxBackend, local/LocalBackend, opensandbox/OpenSandboxBackend
 src/orchestration-v2/   RemoteProviderAdapter (T3-shaped provider surface)
 src/worker/             execution worker (sandbox side) + provider runtimes
 src/config-importer/    Mac → Linux configuration import + secret redaction
@@ -273,28 +281,45 @@ sandbox, while `apps/server/src/git/*` and the checkpoint store are routed
 through `RemoteWorkspaceService` instead of local paths. See
 `docs/t3-integration.md`.
 
-## Running against real Daytona sandboxes
+## Sandbox provider (OpenSandbox)
 
-`DaytonaBackend` maps to the Daytona TypeScript SDK, package name
-**`@daytonaio/sdk`** (verified against 0.224.0): snapshots and images, process
-execution, file transfer, stop/start, organization secrets and port preview
-links.
+The sandboxes are **OpenSandbox** containers
+(<https://github.com/opensandbox-group/OpenSandbox>, Apache-2.0): a lifecycle
+REST API (`opensandbox-server`) plus an agent, `execd`, injected into each
+sandbox container. The Docker runtime on one host is enough — no Kubernetes, no
+microVMs.
+
+`OpenSandboxBackend` talks to it over plain HTTP:
+
+| `SandboxBackend`         | OpenSandbox                                                                                  |
+| ------------------------ | -------------------------------------------------------------------------------------------- |
+| `create`                 | `POST /v1/sandboxes` (image, entrypoint, `resourceLimits`, env, timeout)                     |
+| `status` / `list`        | `GET /v1/sandboxes/{id}` / `GET /v1/sandboxes?page=…`                                        |
+| `stop` / `start`         | `POST /v1/sandboxes/{id}/pause` / `…/resume`                                                 |
+| `destroy`                | `DELETE /v1/sandboxes/{id}`                                                                  |
+| `snapshot`               | `POST /v1/sandboxes/{id}/snapshots` (fsb/Kubernetes runtimes; the Docker runtime refuses it) |
+| `exec`                   | `POST /v1/sandboxes/{id}/proxy/44772/command` — a stream of JSON events                      |
+| `execDetached`           | the same route with `background: true`; the id is the `init` event's text                    |
+| `readFile` / `writeFile` | `…/files/download?path=…` / `…/files/upload` (multipart, metadata as a file part)            |
+| `listDir`                | `…/directories/list?path=…&depth=1`                                                          |
+| `previewUrl`             | `https://<sandbox-host>/v1/sandboxes/{id}/proxy/{port}/` — the one path needing no API key   |
 
 ```bash
-npm install @daytonaio/sdk            # or: pnpm add @daytonaio/sdk --filter @t3tools/daytona
-export DAYTONA_API_KEY=...
+export OPENSANDBOX_API_URL=https://sandbox.example.com
+export OPENSANDBOX_API_KEY=...
+export OPENSANDBOX_IMAGE=t3x-sandbox:latest   # deploy/sandbox-image/Dockerfile
 node dist/src/cli.js worker bundle --out t3x-worker.tgz
-node dist/src/cli.js serve --state-dir ~/.t3x-daytona --port 8087 \
+node dist/src/cli.js serve --state-dir ~/.t3x --port 8087 \
   --worker-url https://control-plane.example.com \
   --worker-bundle t3x-worker.tgz
 ```
 
-With `DAYTONA_API_KEY` set, `serve` picks the Daytona backend on its own
+With a URL or a key set, `serve` picks the OpenSandbox backend on its own
 (`--backend auto`, the default); `--backend local` keeps the directory backend
-for development. `t3x doctor` reports which backend a host would use, and
-whether the SDK resolves.
+for development. `t3x doctor` reports which backend a host would use, whether
+the server answered, and which version it is.
 
-Three things a real deployment has to get right, each of which is a silent
+Four things a real deployment has to get right, each of which is a silent
 failure otherwise:
 
 - **`--worker-url` is the address a sandbox dials.** The default
@@ -307,104 +332,77 @@ failure otherwise:
   worker and its production dependencies, and `--worker-bundle` uploads and
   unpacks it into `<sandbox home>/.t3x-worker` on provisioning. Without it the
   worker entry points at a path that does not exist in the sandbox.
-- **Snapshots decide the resources.** Creating from a snapshot ignores the
-  profile's `runtime.resources` (the snapshot fixes cpu/memory/disk); the
-  profile's numbers apply only when the profile names no snapshot and the
-  sandbox is built from an image. `runtime.snapshot` must name a snapshot that
-  exists in the organization.
+- **The image has to be on the Docker host.** Sandboxes are containers from
+  `OPENSANDBOX_IMAGE` (`deploy/sandbox-image/Dockerfile`: Node 24, git, pnpm, a
+  toolchain). The lifecycle server starts them; a missing image is a failed
+  create.
+- **`resourceLimits` are cgroup limits.** A profile's `runtime.resources`
+  become `cpu`/`memory` limits on the container, so a task cannot take the host
+  down with it. A profile that names a `runtime.snapshot` instead asks the
+  server to restore one — a Docker deployment has none, which is why profiles
+  here are image-backed.
 
-Credentials follow the same rule as the rest of the system — the organization
-API key never enters a sandbox, and never reaches an agent:
+Credentials follow the same rule as the rest of the system — the sandbox
+server's API key never enters a sandbox, and never reaches an agent:
 
 - `inject: env` secrets are set as sandbox environment variables at creation;
-- `inject: headers` secrets need a `hostAllowlist` in the profile, and become
-  organization secrets that the platform substitutes on outbound requests to
-  those hosts, so the value never lands in the sandbox's filesystem;
-- Daytona has no API to attach either to a _running_ sandbox, so
-  `injectSecrets` after creation is refused with `sandbox_backend_unsupported`
-  rather than silently doing nothing.
+- `inject: headers` secrets need a `hostAllowlist` in the profile, and are
+  refused: this backend has no outbound substitution layer (OpenSandbox's
+  credential vault is an egress feature), so declaring one is an error rather
+  than a silent no-op;
+- there is no API to attach either to a _running_ sandbox, so `injectSecrets`
+  after creation is refused with `sandbox_backend_unsupported`.
 
-Preview links are token-scoped rather than time-limited
-(`PreviewLink.expiresAt === null`); when the sandbox is private, pass the token
-as `X-Daytona-Preview-Token`.
-
-### Self-hosted Daytona
-
-The backend talks to whatever deployment the configuration names, so a
-self-hosted Daytona (the open-source Docker Compose or Helm install) works
-exactly like the managed cloud — only the endpoint and the key change:
-
-```bash
-export DAYTONA_API_URL=https://daytona.example.com/api   # your own deployment
-export DAYTONA_API_KEY=<a key created in that deployment>
-export DAYTONA_TARGET=<region>                           # optional
-node dist/src/cli.js doctor                              # probes the URL and the key
-node dist/src/cli.js serve --state-dir ~/.t3x-daytona --port 8087 \
-  --worker-url https://control-plane.example.com --worker-bundle t3x-worker.tgz
-```
-
-- `--daytona-api-url` and `--daytona-target` override `DAYTONA_API_URL` and
-  `DAYTONA_TARGET` for one run. `serve` prints the endpoint and the target it
-  resolved, so a deployment never has to be guessed from behaviour.
-- The same SDK talks to both: `apiUrl` is an SDK option
-  (`new Daytona({ apiKey, apiUrl, target })`), and nothing in the control plane
-  assumes the cloud's hostnames, regions or images.
-- Snapshots and images come from _your_ deployment. A profile that names a
-  snapshot must name one that exists there; a profile that names none is
-  created from an image, `T3X_DAYTONA_DEFAULT_IMAGE`
-  (default `daytonaio/sandbox:latest` — a self-hosted install usually carries
-  its own tag, e.g. `daytonaio/sandbox:0.9.0`).
-- `t3x doctor` reports the URL, the target and — when a key is set — whether
-  the deployment actually answered, because "the URL is wrong" and "the key is
-  wrong" are otherwise indistinguishable from the outside. It exits non-zero
-  when a check fails.
-- A self-hosted deployment is also the only way to prove the last leg of the
-  remote path end to end (a sandbox dialing the control plane): the sandboxes
-  are on your network, so nothing filters the call the way a restricted-egress
-  tier does.
+Preview links need no token and do not expire (`PreviewLink.token === null`,
+`expiresAt === null`): the sandbox's own ports stay bound to loopback
+(`publish_host = 127.0.0.1`), and the only way in is the lifecycle server's
+proxy path, which is exactly the URL `previewUrl` returns.
 
 ### What the tests prove against the real API
 
-`tests/integration/daytonaReal.test.ts` runs only when `DAYTONA_API_KEY` is set
-and the SDK resolves, and otherwise reports as skipped:
+`tests/integration/openSandboxReal.test.ts` runs only when
+`OPENSANDBOX_API_URL` is set, and otherwise reports as skipped:
 
-| Test                       | What it does against real Daytona                                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| SDK and authentication     | loads `@daytonaio/sdk` and lists the organization's managed sandboxes                                                                |
-| create, use, destroy       | setup steps, environment variables, file round-trip, `git clone` + `git worktree`, preview link, stop/start retaining files, destroy |
-| control plane provisioning | a task provisions a real sandbox, clones its repository and creates the task's worktree                                              |
-| worker bundle              | `t3x worker bundle` output is uploaded, unpacked and started inside a real sandbox                                                   |
+| Test                 | What it does against a real server                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| health and version   | `GET /health` answers without a key                                                                 |
+| create, use, destroy | setup steps, environment variables, file round-trip, directory listing, preview link, list, destroy |
+| detached command     | a background command started through `execDetached` is still running after the call returns         |
 
-`T3X_DAYTONA_TEST_SNAPSHOT` (default `daytona-small`) selects the snapshot;
-`T3X_DAYTONA_TEST_REPO` the repository the control-plane test clones.
+`tests/unit/openSandboxBackend.test.ts` runs the same code against a fake
+lifecycle server that answers exactly what `opensandbox-server` 1.1.1 answered
+when this backend was written — including the two things a first draft gets
+wrong: the exit status of a failed command lives in an `error` event, and an
+upload's metadata must be a file part.
 
 ### The end-to-end smoke test
 
 ```bash
-DAYTONA_API_KEY=... node packages/daytona/scripts/sandbox-smoke/run.mjs
+OPENSANDBOX_API_URL=https://sandbox.example.com OPENSANDBOX_API_KEY=... \
+  node packages/daytona/scripts/sandbox-smoke/run.mjs
 ```
 
-It creates a sandbox, ships the built package into it, and runs
-`scripts/sandbox-smoke/smoke.sh` there: the control plane **and** the worker
-inside that one sandbox (so the worker's WebSocket is real, without having to
-cross a network boundary), covering task creation, worker attach, a real turn,
-the runtime-mode cap, fork, text generation, sandbox scope and reference
-counting, stop refusal, per-worktree git state and checkpoints — 43 checks. The
-sandbox is deleted afterwards, including when a check fails. `T3X_SMOKE_KEEP=1`
-leaves it for inspection.
+It creates a sandbox through the backend, ships the built package into it, and
+runs `scripts/sandbox-smoke/smoke.sh` there: the control plane **and** the
+worker inside that one sandbox (so the worker's WebSocket is real, without
+having to cross a network boundary), covering task creation, worker attach, a
+real turn, the runtime-mode cap, fork, text generation, sandbox scope and
+reference counting, stop refusal, per-worktree git state and checkpoints — 43
+checks. The sandbox is deleted afterwards, including when a check fails.
+`T3X_SMOKE_KEEP=1` leaves it for inspection.
 
 **What those tests still do not prove.** The worker's dial _into_ the control
-plane is not exercised from a _remote_ sandbox in a network where the control
-plane is not reachable: on the managed cloud's restricted-egress tier the run
-ends with `task.worker_attach_failed`. What is proven for that leg is the bundle
-landing and the worker process starting inside the sandbox; the socket itself is
-covered by the local-backend suite (a real child process over a real WebSocket)
-and, on the T3 side, by
+plane is not exercised from a sandbox on a _different_ host from the control
+plane in this deployment: the smoke test runs both in one sandbox on purpose.
+What is proven is the bundle landing and the worker process starting inside a
+real sandbox, and — on the T3 side —
 `apps/server/src/orchestration-v2/Adapters/DaytonaAdapterV2.e2e.test.ts`, which
 drives a dispatched message all the way through T3's own orchestrator, ingestor
-and projection against a real control plane and a real worker. Anywhere the two
-hosts can reach each other — a VPS, a self-hosted Daytona — it is the same code
-path.
+and projection against a real control plane and a real worker. The socket
+itself is covered by the local-backend suite (a real child process over a real
+WebSocket), and the deployment that motivated all of this runs the sandbox
+server on the same host as the control plane, where the dial is a normal
+outbound HTTPS request.
 
 ## License
 

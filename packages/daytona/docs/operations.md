@@ -10,10 +10,11 @@ git clone https://github.com/nmime/t3code && cd t3code
 git checkout feat/daytona-sandboxes
 npx --yes pnpm@11.10.0 install --ignore-scripts --prefer-offline
 pnpm --filter @t3tools/daytona build
-npm install @daytonaio/sdk        # the Daytona backend, optional but required for real sandboxes
 
 # credentials stay on the VPS: they are never written into a sandbox
-export DAYTONA_API_KEY=...
+export OPENSANDBOX_API_URL=https://sandbox.example.com   # opensandbox-server
+export OPENSANDBOX_API_KEY=...
+export OPENSANDBOX_IMAGE=t3x-sandbox:latest
 export T3X_API_TOKEN=$(openssl rand -hex 32)   # bearer token for clients
 
 node packages/daytona/dist/src/cli.js worker bundle --out /var/lib/t3x/worker.tgz
@@ -37,12 +38,12 @@ State lives in one directory:
 Back up `control-plane.sqlite` and `secret.key` together: without the key the
 stored credentials cannot be decrypted.
 
-## Daytona
+## The sandbox provider (OpenSandbox)
+
+The control plane never talks to Docker itself: it talks to an OpenSandbox
+lifecycle server over HTTP, and that server runs the sandbox containers.
 
 ```bash
-npm install @daytonaio/sdk        # the real package name; @daytona-io/sdk does not exist
-export DAYTONA_API_KEY=...
-
 # 1. pack the worker so a sandbox can run it
 node dist/src/cli.js worker bundle --out /var/lib/t3x/worker.tgz
 
@@ -52,28 +53,41 @@ node dist/src/cli.js serve --state-dir /var/lib/t3x --port 8087 \
   --worker-bundle /var/lib/t3x/worker.tgz
 ```
 
-`serve --backend auto` (the default) uses Daytona when `DAYTONA_API_KEY` is set
-and `@daytonaio/sdk` resolves, and the local directory backend otherwise;
-`--backend local|daytona` forces one. `t3x doctor` says which one a host picks.
-Snapshots named by `runtime.snapshot` in a profile must exist in the Daytona
-organization before tasks are created; creating from a snapshot ignores the
-profile's `runtime.resources`, because the snapshot fixes them.
+`serve --backend auto` (the default) uses OpenSandbox when
+`OPENSANDBOX_API_URL` or `OPENSANDBOX_API_KEY` is set, and the local directory
+backend otherwise; `--backend local|opensandbox` forces one. `t3x doctor` says
+which one a host picks, and whether the server answered.
 
-### Self-hosted Daytona
+### Installing the sandbox server
 
-The same SDK talks to your own deployment; only the endpoint changes:
+`deploy/t3x-bootstrap.sh` does this, and it is what the reference deployment
+runs. By hand, on the host that will run sandboxes:
 
 ```bash
-export DAYTONA_API_URL=https://daytona.example.com/api   # your deployment
-export DAYTONA_API_KEY=<a key created there>
-export DAYTONA_TARGET=<region>                           # optional
-export T3X_DAYTONA_DEFAULT_IMAGE=daytonaio/sandbox:0.9.0 # image used when a profile names no snapshot
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+uv venv --python 3.12 /opt/opensandbox/venv
+uv pip install --python /opt/opensandbox/venv/bin/python opensandbox-server==1.1.1
+docker pull opensandbox/execd:release-1.1.1
+docker build -t t3x-sandbox:latest packages/daytona/deploy/sandbox-image
 ```
 
-`--daytona-api-url`, `--daytona-target` and `--daytona-default-image` override
-those for one `serve` run, and the banner prints the endpoint and target it
-resolved. Snapshots and images come from your deployment, so a profile that
-names a snapshot must name one it actually has.
+`/etc/opensandbox/sandbox.toml` holds the server's own configuration
+(`[server] api_key`, `eip`, `[runtime] execd_image`, `[docker] publish_host`),
+`deploy/t3x-bootstrap.sh` writes it, and `docs/setup.md` §2 explains every key
+that matters. The service is `opensandbox.service`, user `osb`, in the `docker`
+group, state under `/var/lib/opensandbox`:
+
+```bash
+systemctl status opensandbox | journalctl -u opensandbox -f
+curl -s http://127.0.0.1:8080/health
+curl -s -H "OPEN-SANDBOX-API-KEY: $OPENSANDBOX_API_KEY" \
+  "$OPENSANDBOX_API_URL/v1/sandboxes?pageSize=50"
+```
+
+Deleting a sandbox through the API deletes its container; nothing else in the
+lifecycle is manual. The sandbox image is rebuilt with `docker build` — a task
+sees the new image from its next sandbox, and existing sandboxes keep the one
+they were created from.
 
 Three requirements that fail silently when missed:
 
@@ -85,38 +99,42 @@ Three requirements that fail silently when missed:
 
 Rules the backend enforces:
 
-- the organization API key never enters a sandbox or an agent process;
-- `inject: env` secrets are set at creation (`envVars`), `inject: headers`
-  secrets require a `hostAllowlist` and are mounted as organization secrets so
-  the value is substituted on outbound requests instead of living in the
-  sandbox; neither can be attached to an existing sandbox, and that is refused
-  rather than ignored;
-- preview links are port-scoped and token-scoped (`getPreviewLink`); pass the
-  token as `X-Daytona-Preview-Token` when the sandbox is private;
-- `autoStopInterval` is set from the profile, but the orchestrator never relies
-  on infrastructure idleness to decide a task finished.
+- the sandbox server's API key never enters a sandbox or an agent process;
+- `inject: env` secrets are set as sandbox environment variables at creation;
+  `inject: headers` secrets are refused (`sandbox_backend_unsupported`), because
+  this backend has no outbound substitution layer — declaring one is an error,
+  not a silent no-op;
+- neither can be attached to an existing sandbox, and that is refused rather
+  than ignored;
+- preview links are port-scoped, need no token and do not expire: the sandbox's
+  ports stay bound to loopback and the only way in is the server's proxy path;
+- the sandbox's own timeout is set from the profile, but the orchestrator never
+  relies on infrastructure idleness to decide a task finished.
 
-### Verifying a Daytona host
+### Verifying a sandbox host
 
 ```bash
-node dist/src/cli.js doctor                      # node, worker entry, SDK, endpoint, key, reachability
-node dist/src/cli.js doctor --daytona-api-url https://daytona.example.com/api
-DAYTONA_API_KEY=... node --test packages/daytona/dist/tests/integration/daytonaReal.test.js
+node dist/src/cli.js doctor                      # node, worker entry, endpoint, key, image, reachability
+node dist/src/cli.js doctor --opensandbox-url https://sandbox.example.com
+OPENSANDBOX_API_URL=https://sandbox.example.com OPENSANDBOX_API_KEY=... \
+  node --test packages/daytona/dist/tests/integration/openSandboxReal.test.js
 ```
 
-`doctor` probes the deployment when a key is set and exits non-zero on any
-failed check, which is what tells "the URL is wrong" apart from "the key is
-wrong" before a task is ever created.
+`doctor` probes the server and exits non-zero on any failed check, which is what
+tells "the URL is wrong" apart from "the key is wrong" before a task is ever
+created.
 
-The real-API suite creates sandboxes and deletes them again; set
-`T3X_DAYTONA_TEST_SNAPSHOT` to a snapshot your organization actually has.
+The real-API suite creates sandboxes and deletes them again, through the same
+backend the control plane uses.
 
-One environmental limit is worth knowing before blaming the code: **restricted
-egress tiers**. A sandbox on such a tier can reach package registries and
-Daytona's own API and nothing else, so a worker inside it cannot dial a control
-plane hosted anywhere else (the failure shows up as `task.worker_attach_failed`
-after the worker starts and its socket is reset). Run the control plane on a
-host the sandbox can reach, or lift the tier's network restrictions.
+Egress is the one environmental limit worth knowing before blaming the code, and
+it is why this deployment self-hosts: a sandbox has to be able to dial the
+control plane. With the sandbox server on the same host that is an ordinary
+outbound HTTPS request, and nothing filters it. A hosted provider with a
+tier-based firewall (Daytona's Tier 1/2, which restricts a sandbox's outbound
+traffic to package registries and the provider's own API and cannot be
+overridden at the sandbox level) produces `task.worker_attach_failed` after the
+worker starts, with the socket reset — a policy, not a bug in this code.
 
 ## Credentials
 

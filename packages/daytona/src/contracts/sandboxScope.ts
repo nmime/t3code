@@ -58,7 +58,7 @@ export interface ProjectSandboxRecord {
    * sandboxes are recorded too, so clients can list and stop them.
    */
   projectId: string | null;
-  backend: "local" | "daytona";
+  backend: "local" | "opensandbox";
   profileId: string;
   profileDigest: string;
   compatibilityKey: string;

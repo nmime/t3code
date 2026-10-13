@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { execFile, spawn } from "node:child_process";
+import * as http from "node:http";
 import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -52,8 +53,14 @@ test("CLI: profile, task, message, git and reconcile", async () => {
     ].join("\n"),
   );
 
-  const doctor = (await t3x(["doctor"])) as { checks: Array<{ name: string; ok: boolean }> };
-  assert.ok(doctor.checks.every((c) => c.ok));
+  const doctor = (await t3x(["doctor"]).catch((error: { stdout?: string }) =>
+    JSON.parse(error.stdout ?? "{}"),
+  )) as { checks: Array<{ name: string; ok: boolean }> };
+  // The checks this machine can always satisfy; a sandbox server and its key
+  // are deployment state, and their absence is reported, not asserted away.
+  for (const name of ["node", "worker entry", "sandbox api url", "sandbox image", "git"]) {
+    assert.equal(doctor.checks.find((check) => check.name === name)?.ok, true, `doctor: ${name}`);
+  }
 
   const added = (await t3x([
     "profile",
@@ -227,6 +234,37 @@ test("HTTP API: create, message, approvals, event replay and remote git", async 
       ((await missing.json()) as { error: { code: string } }).error.code,
       "task_not_found",
     );
+  } finally {
+    await server.stop();
+  }
+});
+
+test("HTTP API: a task can be created from a minimal body", async () => {
+  // A client with no repository (a scratch thread) omits `repositoryUrl`, and
+  // one that lets the profile choose omits `provider`. Both are bound into
+  // SQLite, where `undefined` is a bind error rather than a default — this is
+  // the shape T3 actually sends.
+  const server = await startTestServer({ stateDir: tempStateDir() });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    server.profiles.createProfile({ profileId: "minimal", body: testProfile() as never });
+
+    const created = await fetch(`${base}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profileId: "minimal", scope: "task" }),
+    });
+    assert.equal(created.status, 201);
+    const { task } = (await created.json()) as {
+      task: { taskId: string; provider: string; repositoryUrl: string };
+    };
+    // The profile's own default agent, and no repository at all.
+    assert.equal(task.provider, "echo");
+    assert.equal(task.repositoryUrl, "");
+
+    await server.effectWorker.drain();
+    await waitFor(() => server.registry.isConnected(task.taskId), 30_000, "worker");
+    assert.equal(server.tasks.getTask(task.taskId).state, "ready");
   } finally {
     await server.stop();
   }
@@ -422,53 +460,93 @@ test("CLI: --help anywhere prints usage instead of starting a server", async () 
   // backgrounded process with no output ended up sitting in `ps` for a day.
   const { stdout } = await run("node", [cli, "serve", "--help"], { cwd: repoRoot });
   assert.match(stdout, /t3x — T3 Code remote execution control plane/);
-  assert.match(stdout, /DAYTONA_API_URL/);
+  assert.match(stdout, /OPENSANDBOX_API_URL/);
+  assert.match(stdout, /--backend auto\|local\|opensandbox/);
 });
 
-test("CLI: doctor reports the endpoint it would use, and probes it when it can", async () => {
-  const { stdout } = await run(
-    "node",
-    [cli, "doctor", "--daytona-api-url", "https://daytona.test/api"],
-    {
-      cwd: repoRoot,
-      env: { ...process.env, DAYTONA_API_KEY: "" },
-    },
-  ).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "{}" }));
-  const { checks } = JSON.parse(stdout) as {
+test("CLI: doctor names the sandbox endpoint and probes it", async () => {
+  // A lifecycle server that answers /health, /version and the sandbox list.
+  const sandbox = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (req.url === "/health") return res.end(JSON.stringify({ status: "healthy" }));
+    if (req.url === "/version") return res.end(JSON.stringify({ version: "1.1.1" }));
+    res.end(JSON.stringify({ items: [], pagination: { hasNextPage: false } }));
+  });
+  await new Promise<void>((resolve) => sandbox.listen(0, "127.0.0.1", resolve));
+  const port = (sandbox.address() as { port: number }).port;
+  const url = `http://127.0.0.1:${port}`;
+  try {
+    const { stdout } = await run(
+      "node",
+      [cli, "doctor", "--opensandbox-url", url, "--opensandbox-api-key", "test-key"],
+      { cwd: repoRoot, env: { ...process.env, OPENSANDBOX_API_KEY: "" } },
+    );
+    const { checks } = JSON.parse(stdout) as {
+      checks: Array<{ name: string; ok: boolean; detail: string }>;
+    };
+    const named = checks.find((check) => check.name === "sandbox api url");
+    assert.ok(named, "doctor names the endpoint");
+    assert.equal(named!.detail, url);
+    const probed = checks.find((check) => check.name === "sandbox server reachable");
+    assert.equal(probed?.ok, true, `probe failed: ${probed?.detail}`);
+    assert.match(probed!.detail, /opensandbox-server 1\.1\.1/);
+  } finally {
+    await new Promise<void>((resolve) => {
+      sandbox.close(() => resolve());
+      sandbox.closeAllConnections();
+    });
+  }
+});
+
+test("CLI: doctor reports an unreachable sandbox server instead of pretending", async () => {
+  // 127.0.0.1:1 answers nothing; the check must say so and exit non-zero.
+  const result = await run("node", [cli, "doctor", "--opensandbox-url", "http://127.0.0.1:1"], {
+    cwd: repoRoot,
+    env: { ...process.env, OPENSANDBOX_API_KEY: "" },
+  }).then(
+    () => ({ stdout: "", code: 0 }),
+    (error: { stdout?: string; code?: number }) => ({
+      stdout: error.stdout ?? "{}",
+      code: error.code ?? 1,
+    }),
+  );
+  assert.equal(result.code, 1);
+  const { checks } = JSON.parse(result.stdout) as {
     checks: Array<{ name: string; ok: boolean; detail: string }>;
   };
-  const url = checks.find((check) => check.name === "daytona api url");
-  assert.ok(url, "doctor names the endpoint");
-  assert.equal(url!.detail, "https://daytona.test/api");
-  // No key, no probe: reachability is only a question a key can answer.
-  assert.equal(
-    checks.some((check) => check.name === "daytona reachable"),
-    false,
-  );
+  const probed = checks.find((check) => check.name === "sandbox server reachable");
+  assert.equal(probed?.ok, false);
+  assert.match(probed!.detail, /http:\/\/127\.0\.0\.1:1/);
 });
 
-test("CLI: serve resolves the Daytona endpoint from the flag and the environment", async () => {
-  const stateDir = tempStateDir();
-  const child = spawn("node", [
-    cli,
-    "serve",
-    "--state-dir",
-    stateDir,
-    "--port",
-    "0",
-    "--backend",
-    "daytona",
-    "--daytona-api-url",
-    "https://daytona.test/api",
-    "--daytona-target",
-    "eu",
-  ]);
+test("CLI: serve picks the sandbox backend from the flag and the environment", async () => {
+  const sandbox = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (req.url === "/health") return res.end(JSON.stringify({ status: "healthy" }));
+    if (req.url === "/version") return res.end(JSON.stringify({ version: "1.1.1" }));
+    res.end(JSON.stringify({ items: [], pagination: { hasNextPage: false } }));
+  });
+  await new Promise<void>((resolve) => sandbox.listen(0, "127.0.0.1", resolve));
+  const port = (sandbox.address() as { port: number }).port;
+  const url = `http://127.0.0.1:${port}`;
+
+  // `--backend auto` with OPENSANDBOX_API_URL set must resolve to OpenSandbox:
+  // that is what makes a deployment work with no flag at all.
+  const child = spawn("node", [cli, "serve", "--state-dir", tempStateDir(), "--port", "0"], {
+    cwd: repoRoot,
+    env: { ...process.env, OPENSANDBOX_API_URL: url, OPENSANDBOX_API_KEY: "test-key" },
+  });
   let out = "";
   child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
-  // The banner is printed before the server starts serving, and the server
-  // never exits on its own, so the banner is what this test waits for.
-  await waitFor(() => out.includes("daytona target"), 15_000, "the serve banner");
-  child.kill("SIGKILL");
-  assert.match(out, /daytona api:\s+https:\/\/daytona\.test\/api/);
-  assert.match(out, /daytona target: eu/);
+  try {
+    await waitFor(() => out.includes("sandbox api:"), 20_000, "the serve banner");
+    assert.match(out, /backend:\s+opensandbox \(auto\)/);
+    assert.match(out, new RegExp(`sandbox api:\\s+${url.replace(/[.:/]/g, "\\$&")}`));
+  } finally {
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => {
+      sandbox.close(() => resolve());
+      sandbox.closeAllConnections();
+    });
+  }
 });

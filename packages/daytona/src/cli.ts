@@ -23,9 +23,10 @@ import {
 } from "./execution/ControlPlaneServer.js";
 import { parseProfileYaml } from "./contracts/environmentProfile.js";
 import {
-  DAYTONA_SDK_INSTALL_HINT,
-  DAYTONA_SDK_PACKAGE,
-} from "./execution/daytona/DaytonaBackend.js";
+  OPENSANDBOX_DEFAULT_BASE_URL,
+  OPENSANDBOX_DEFAULT_IMAGE,
+  OpenSandboxBackend,
+} from "./execution/backends/opensandbox/OpenSandboxBackend.js";
 import { DEFAULT_SANDBOX_WORKER_ENTRY } from "./execution/SandboxControlPlane.js";
 import { importLocalConfigs } from "./config-importer/importer.js";
 import { ConfigBundleStore } from "./config-importer/ConfigBundle.js";
@@ -35,9 +36,9 @@ const USAGE = `t3x — T3 Code remote execution control plane
 
 Usage:
   t3x serve [--state-dir DIR] [--port N] [--api-token TOKEN]
-            [--backend auto|local|daytona] [--worker-url https://host]
+            [--backend auto|local|opensandbox] [--worker-url https://host]
             [--worker-bundle FILE.tgz] [--worker-entry-in-sandbox PATH]
-            [--daytona-api-url URL] [--daytona-target REGION]
+            [--opensandbox-url URL] [--opensandbox-image IMAGE]
   t3x worker bundle [--out FILE.tgz]
   t3x profile add --id ID --file FILE.yaml
   t3x profile list
@@ -58,15 +59,19 @@ Usage:
   t3x task git TASK_ID
   t3x reconcile
   t3x import-config --home DIR --name NAME [--targets codex,claude,opencode]
-  t3x doctor [--daytona-api-url URL]
+  t3x doctor [--opensandbox-url URL]
 
-Daytona:
-  DAYTONA_API_KEY      the organization API key (required for the Daytona backend)
-  DAYTONA_API_URL      API root; defaults to https://app.daytona.io/api. Point it
-                       at your own deployment to use a self-hosted Daytona
-                       (usually https://<your-host>/api)
-  DAYTONA_TARGET       default region for sandboxes and snapshots
-  --daytona-api-url / --daytona-target override the two variables for one run.
+OpenSandbox (the sandbox provider):
+  OPENSANDBOX_API_URL  lifecycle server root; defaults to http://127.0.0.1:8080
+                       (a deployment usually puts it behind TLS, e.g.
+                       https://sandbox.example.com)
+  OPENSANDBOX_API_KEY  the server's api_key, sent as OPEN-SANDBOX-API-KEY
+  OPENSANDBOX_IMAGE    image every image-backed profile is built from
+  OPENSANDBOX_PUBLIC_URL
+                       root used for browser-facing preview URLs, when it is not
+                       the same as OPENSANDBOX_API_URL
+  --opensandbox-url / --opensandbox-api-key / --opensandbox-image override the
+  variables for one run.
 
 Sandbox scope (the "Run this task in a new sandbox" toggle):
   default            one shared sandbox per project/repository, one git
@@ -187,7 +192,7 @@ function stateDirFrom(args: string[]): string {
     strict: false,
   });
   const dir = (values as Record<string, string | undefined>)["state-dir"];
-  return path.resolve(dir ?? path.join(os.homedir(), ".t3-daytona"));
+  return path.resolve(dir ?? path.join(os.homedir(), ".t3x"));
 }
 
 async function withServer<T>(
@@ -211,20 +216,20 @@ async function withServer<T>(
 
 async function serve(args: string[]): Promise<void> {
   const flags = parseFlags(args);
-  const stateDir = path.resolve(flags["state-dir"] ?? path.join(os.homedir(), ".t3-daytona"));
+  const stateDir = path.resolve(flags["state-dir"] ?? path.join(os.homedir(), ".t3x"));
   const port = Number(flags.port ?? 8087);
   const apiToken = flags["api-token"] ?? process.env.T3X_API_TOKEN ?? null;
   const backendKind = (flags.backend ?? "auto") as SandboxBackendKind;
-  const daytonaApiUrl = flags["daytona-api-url"] ?? process.env.DAYTONA_API_URL;
-  const daytonaTarget = flags["daytona-target"] ?? process.env.DAYTONA_TARGET;
-  const daytonaImage = flags["daytona-default-image"] ?? process.env.T3X_DAYTONA_DEFAULT_IMAGE;
+  const sandboxUrl = flags["opensandbox-url"] ?? process.env.OPENSANDBOX_API_URL;
+  const sandboxKey = flags["opensandbox-api-key"] ?? process.env.OPENSANDBOX_API_KEY;
+  const sandboxImage = flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE;
   const backend = await createSandboxBackend({
     stateDir,
     kind: backendKind,
-    daytona: {
-      ...(daytonaApiUrl ? { apiUrl: daytonaApiUrl } : {}),
-      ...(daytonaTarget ? { target: daytonaTarget } : {}),
-      ...(daytonaImage ? { defaultImage: daytonaImage } : {}),
+    opensandbox: {
+      ...(sandboxUrl ? { baseUrl: sandboxUrl } : {}),
+      ...(sandboxKey ? { apiKey: sandboxKey } : {}),
+      ...(sandboxImage ? { defaultImage: sandboxImage } : {}),
     },
   });
 
@@ -245,15 +250,17 @@ async function serve(args: string[]): Promise<void> {
   console.log(`  state dir:    ${stateDir}`);
   console.log(`  worker url:   ${server.workerUrl}`);
   console.log(`  backend:      ${server.backend.kind}${backendKind === "auto" ? " (auto)" : ""}`);
-  if (server.backend.kind === "daytona") {
-    console.log(`  daytona api:  ${daytonaApiUrl ?? "https://app.daytona.io/api (cloud default)"}`);
-    console.log(`  daytona target: ${daytonaTarget ?? "(organization default region)"}`);
+  if (server.backend.kind === "opensandbox") {
+    console.log(
+      `  sandbox api:  ${sandboxUrl ?? `${OPENSANDBOX_DEFAULT_BASE_URL} (local default)`}`,
+    );
+    console.log(`  sandbox image: ${sandboxImage ?? `${OPENSANDBOX_DEFAULT_IMAGE} (default)`}`);
   }
   console.log(
     `  worker bundle:${flags["worker-bundle"] ? ` ${path.resolve(flags["worker-bundle"])}` : " none (the sandbox must already carry the worker)"}`,
   );
   console.log(`  api auth:     ${apiToken ? "bearer token required" : "open (development)"}`);
-  if (server.backend.kind === "daytona" && !flags["worker-url"]) {
+  if (server.backend.kind === "opensandbox" && !flags["worker-url"]) {
     console.log(
       "  note: no --worker-url given, so sandboxes are told to dial 127.0.0.1 — set it to the\n" +
         "        control plane's address as reachable from a sandbox (https://host).",
@@ -571,21 +578,13 @@ async function importConfig(args: string[]): Promise<void> {
   );
 }
 
-function sdkInstalled(): boolean {
-  try {
-    createRequire(import.meta.url).resolve(`${DAYTONA_SDK_PACKAGE}/package.json`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function doctor(args: string[] = []): Promise<void> {
   const flags = parseFlags(args);
   const workerEntry = defaultWorkerEntry();
-  const apiUrl = flags["daytona-api-url"] ?? process.env.DAYTONA_API_URL;
-  const target = flags["daytona-target"] ?? process.env.DAYTONA_TARGET;
-  const apiKey = process.env.DAYTONA_API_KEY;
+  const baseUrl = flags["opensandbox-url"] ?? process.env.OPENSANDBOX_API_URL;
+  const apiKey = flags["opensandbox-api-key"] ?? process.env.OPENSANDBOX_API_KEY;
+  const image = flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE;
+
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [
     {
       name: "node",
@@ -598,75 +597,65 @@ async function doctor(args: string[] = []): Promise<void> {
       detail: workerEntry,
     },
     {
-      name: "daytona sdk",
-      ok: sdkInstalled(),
-      detail: sdkInstalled()
-        ? `${DAYTONA_SDK_PACKAGE} resolves`
-        : `${DAYTONA_SDK_PACKAGE} not installed (local backend only); ${DAYTONA_SDK_INSTALL_HINT}`,
-    },
-    {
-      name: "daytona api url",
+      name: "sandbox api url",
       ok: true,
-      detail: apiUrl
-        ? `${apiUrl}${target ? ` (target ${target})` : ""}`
-        : "https://app.daytona.io/api (cloud default; set DAYTONA_API_URL for a self-hosted deployment)",
+      detail:
+        baseUrl ??
+        `${OPENSANDBOX_DEFAULT_BASE_URL} (default; set OPENSANDBOX_API_URL for a remote one)`,
     },
     {
-      name: "daytona api key",
+      name: "sandbox api key",
       ok: Boolean(apiKey),
       detail: apiKey
-        ? "DAYTONA_API_KEY is set: `serve` picks the Daytona backend automatically"
-        : "DAYTONA_API_KEY is not set: `serve` uses the local backend",
+        ? "OPENSANDBOX_API_KEY is set: `serve` picks the OpenSandbox backend automatically"
+        : "OPENSANDBOX_API_KEY is not set: the server must be unauthenticated, or `serve` uses the local backend",
+    },
+    {
+      name: "sandbox image",
+      ok: true,
+      detail: image ?? `${OPENSANDBOX_DEFAULT_IMAGE} (default)`,
     },
     { name: "git", ok: true, detail: "required inside sandboxes for checkpoints" },
   ];
 
-  // A key plus an SDK is the only case where reachability can be answered, and
-  // it is the question a self-hosted deployment actually asks: does this URL
-  // serve the Daytona API, and does this key work against it?
-  if (apiKey && sdkInstalled()) {
-    checks.push(
-      await probeDaytonaApi({
-        apiKey,
-        ...(apiUrl ? { apiUrl } : {}),
-        ...(target ? { target } : {}),
-      }),
-    );
-  }
+  // Reachability is the question a deployment actually asks: does this URL
+  // serve the OpenSandbox lifecycle API, and does this key work against it?
+  checks.push(
+    await probeOpenSandbox({
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(apiKey ? { apiKey } : {}),
+      ...(image ? { defaultImage: image } : {}),
+    }),
+  );
 
   console.log(JSON.stringify({ checks }, null, 2));
   if (checks.some((check) => !check.ok)) process.exitCode = 1;
 }
 
-/** Ask the configured deployment for its sandboxes; report what came back. */
-async function probeDaytonaApi(options: {
-  apiKey: string;
-  apiUrl?: string;
-  target?: string;
+/** Ask the configured lifecycle server for its health, version and sandboxes. */
+async function probeOpenSandbox(options: {
+  baseUrl?: string;
+  apiKey?: string;
+  defaultImage?: string;
 }): Promise<{ name: string; ok: boolean; detail: string }> {
-  const { loadDaytonaClient } = await import("./execution/daytona/DaytonaBackend.js");
+  const shown = options.baseUrl ?? OPENSANDBOX_DEFAULT_BASE_URL;
   try {
-    const client = await loadDaytonaClient(options);
-    const sandboxes: string[] = [];
-    // `list()` is an async iterable; two entries are enough to prove reach.
-    for await (const sandbox of client.list()) {
-      sandboxes.push(sandbox.id);
-      if (sandboxes.length >= 2) break;
-    }
+    const backend = await OpenSandboxBackend.create(options);
+    const health = await backend.ping();
+    const sandboxes = await backend.list();
     return {
-      name: "daytona reachable",
-      ok: true,
-      detail: `${options.apiUrl ?? "https://app.daytona.io/api"} answered; ${
-        sandboxes.length === 0 ? "no sandboxes" : `e.g. ${sandboxes.join(", ")}`
-      }`,
+      name: "sandbox server reachable",
+      ok: health.status === "healthy",
+      detail:
+        `${shown} answered (status ${health.status}` +
+        `${health.version ? `, opensandbox-server ${health.version}` : ""}); ` +
+        `${sandboxes.length === 0 ? "no t3x sandboxes" : `${sandboxes.length} t3x sandbox(es)`}`,
     };
   } catch (error) {
     return {
-      name: "daytona reachable",
+      name: "sandbox server reachable",
       ok: false,
-      detail: `${options.apiUrl ?? "https://app.daytona.io/api"} failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      detail: `${shown} failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

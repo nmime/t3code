@@ -1,14 +1,13 @@
 /**
  * Sandbox backends (report §5).
  *
- * The control plane talks to this interface only, so the Daytona backend can
- * be swapped for Docker, Kubernetes jobs or SSH workers later without
- * touching agent integrations.
+ * The control plane talks to this interface only, so a sandbox provider can be
+ * swapped without touching agent integrations.
  *
  * Two implementations ship:
  *   - LocalBackend: real, filesystem-and-process backed (tests, local dev)
- *   - DaytonaBackend: maps to the Daytona TypeScript SDK surface (snapshots,
- *     lifecycle, resources, process sessions, secrets, signed preview URLs)
+ *   - OpenSandboxBackend: HTTP against a self-hosted OpenSandbox lifecycle
+ *     server and the execd agent inside each sandbox
  */
 
 import type { SandboxHandle, SandboxStatus, WorkspaceEntry } from "../../contracts/execution.js";
@@ -67,7 +66,7 @@ export interface ExecResult {
 }
 
 export interface SandboxBackend {
-  readonly kind: "local" | "daytona";
+  readonly kind: "local" | "opensandbox";
 
   create(spec: SandboxSpec): Promise<SandboxHandle>;
   status(sandboxId: string): Promise<SandboxStatus>;
@@ -81,6 +80,16 @@ export interface SandboxBackend {
   restoreSnapshot(sandboxId: string, snapshotId: string): Promise<void>;
 
   exec(sandboxId: string, command: string, options?: ExecOptions): Promise<ExecResult>;
+
+  /**
+   * Start a command that must outlive the call — the worker.
+   *
+   * A backend whose `exec` is request-scoped (an HTTP call into a sandbox
+   * agent, which may reap the process group when the call returns)
+   * implements this; the launcher falls back to `nohup … &` through
+   * `exec()` when it is absent.
+   */
+  execDetached?(sandboxId: string, command: string, options?: ExecOptions): Promise<void>;
   readFile(sandboxId: string, path: string): Promise<Buffer>;
   writeFile(sandboxId: string, path: string, data: Buffer, mode?: number): Promise<void>;
   listDir(sandboxId: string, path: string): Promise<WorkspaceEntry[]>;

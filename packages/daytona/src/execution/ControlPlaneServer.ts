@@ -24,8 +24,8 @@ import { TaskService } from "./TaskService.js";
 import { EffectWorker } from "./EffectWorker.js";
 import { TaskRecoveryService } from "./TaskRecoveryService.js";
 import { HttpApi } from "./HttpApi.js";
-import { LocalBackend } from "./daytona/LocalBackend.js";
-import type { SandboxBackend } from "./daytona/SandboxBackend.js";
+import { LocalBackend } from "./backends/local/LocalBackend.js";
+import type { SandboxBackend } from "./backends/SandboxBackend.js";
 import { ConfigBundleStore } from "../config-importer/ConfigBundle.js";
 
 export interface ControlPlaneOptions {
@@ -56,37 +56,38 @@ export interface ControlPlaneOptions {
 /**
  * Which sandbox backend to run.
  *
- * `auto` (the default) uses Daytona when `DAYTONA_API_KEY` is set and the SDK
- * is installed, and the local directory backend otherwise — so a laptop can
- * run the control plane with no Daytona account, and a VPS with the key
- * provisions real sandboxes without a flag.
+ * `auto` (the default) uses the OpenSandbox lifecycle server when one is
+ * configured (`OPENSANDBOX_API_URL` or `OPENSANDBOX_API_KEY`) and the local
+ * directory backend otherwise — so a laptop can run the control plane with no
+ * sandbox server at all, and a deployment provisions real sandboxes without a
+ * flag.
  */
-export type SandboxBackendKind = "auto" | "local" | "daytona";
+export type SandboxBackendKind = "auto" | "local" | "opensandbox";
 
 export async function createSandboxBackend(options: {
   stateDir: string;
   kind?: SandboxBackendKind;
-  daytona?: {
+  opensandbox?: {
+    baseUrl?: string;
+    /** Root used for browser-facing preview URLs, when it differs from baseUrl. */
+    publicBaseUrl?: string;
     apiKey?: string;
-    apiUrl?: string;
-    target?: string;
     defaultImage?: string;
-    defaultAutoStopMinutes?: number;
   };
 }): Promise<SandboxBackend> {
   const kind = options.kind ?? "auto";
+  const baseUrl = options.opensandbox?.baseUrl ?? process.env.OPENSANDBOX_API_URL;
+  const apiKey = options.opensandbox?.apiKey ?? process.env.OPENSANDBOX_API_KEY ?? "";
+
   if (kind === "local") return new LocalBackend(path.join(options.stateDir, "sandboxes"));
-  const apiKey = options.daytona?.apiKey ?? process.env.DAYTONA_API_KEY ?? "";
-  if (kind === "auto" && !apiKey) return new LocalBackend(path.join(options.stateDir, "sandboxes"));
-  const { DaytonaBackend } = await import("./daytona/DaytonaBackend.js");
-  return await DaytonaBackend.create({
-    apiKey,
-    ...(options.daytona?.apiUrl ? { apiUrl: options.daytona.apiUrl } : {}),
-    ...(options.daytona?.target ? { target: options.daytona.target } : {}),
-    ...(options.daytona?.defaultImage ? { defaultImage: options.daytona.defaultImage } : {}),
-    ...(options.daytona?.defaultAutoStopMinutes !== undefined
-      ? { defaultAutoStopMinutes: options.daytona.defaultAutoStopMinutes }
-      : {}),
+  if (kind === "auto" && !baseUrl && !apiKey)
+    return new LocalBackend(path.join(options.stateDir, "sandboxes"));
+
+  const { OpenSandboxBackend } = await import("./backends/opensandbox/OpenSandboxBackend.js");
+  return await OpenSandboxBackend.create({
+    ...options.opensandbox,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(apiKey ? { apiKey } : {}),
   });
 }
 

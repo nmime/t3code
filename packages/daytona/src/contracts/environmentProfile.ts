@@ -21,7 +21,14 @@ import { canonicalize } from "./canonical.js";
 import { sha256Hex } from "./ids.js";
 import { ExecutionError } from "./errors.js";
 
-export const PROFILE_API_VERSION = "t3-daytona/v1";
+export const PROFILE_API_VERSION = "t3x/v1";
+
+/**
+ * Versions the parser still accepts. The profile contract was named after
+ * Daytona before the deployment moved to a self-hosted sandbox provider;
+ * profiles written then keep working instead of failing to parse.
+ */
+export const PROFILE_API_VERSION_ALIASES = ["t3-daytona/v1"] as const;
 
 /**
  * T3's runtime modes, weakest first. The order is the comparison: a profile
@@ -50,7 +57,7 @@ export const ResourcesSchema = z.object({
 });
 
 export const ProfileBodySchema = z.object({
-  apiVersion: z.literal(PROFILE_API_VERSION),
+  apiVersion: z.union([z.literal(PROFILE_API_VERSION), z.literal(PROFILE_API_VERSION_ALIASES[0])]),
   kind: z.literal("EnvironmentProfile"),
   metadata: z.object({
     name: z.string().min(1),

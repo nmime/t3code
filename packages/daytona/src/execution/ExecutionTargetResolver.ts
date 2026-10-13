@@ -16,7 +16,7 @@ export class DefaultExecutionTargetResolver implements ExecutionTargetResolver {
   resolve(task: TaskRecord): ExecutionTarget {
     if (task.sandboxId) {
       return {
-        kind: "daytona",
+        kind: "sandbox",
         taskId: task.taskId,
         sandboxId: task.sandboxId,
         environmentProfileVersion: `${task.profileId}#${task.profileDigest.slice(0, 12)}`,

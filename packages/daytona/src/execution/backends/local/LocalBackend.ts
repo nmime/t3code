@@ -13,9 +13,9 @@ import { createHmac, randomBytes, createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import type { SandboxHandle, SandboxStatus, WorkspaceEntry } from "../../contracts/execution.js";
-import { SandboxNotFoundError, ExecutionError } from "../../contracts/errors.js";
-import { newSandboxId } from "../../contracts/ids.js";
+import type { SandboxHandle, SandboxStatus, WorkspaceEntry } from "../../../contracts/execution.js";
+import { SandboxNotFoundError, ExecutionError } from "../../../contracts/errors.js";
+import { newSandboxId } from "../../../contracts/ids.js";
 import type {
   ExecOptions,
   ExecResult,
@@ -23,7 +23,7 @@ import type {
   SandboxBackend,
   SandboxSecret,
   SandboxSpec,
-} from "./SandboxBackend.js";
+} from "../SandboxBackend.js";
 
 interface SandboxMeta {
   id: string;

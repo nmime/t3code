@@ -11,7 +11,7 @@ import {
 } from "../../src/contracts/environmentProfile.js";
 
 const base = {
-  apiVersion: "t3-daytona/v1",
+  apiVersion: "t3x/v1",
   kind: "EnvironmentProfile",
   metadata: { name: "typescript-backend", version: 3 },
   runtime: { snapshot: "node24-dev-v3", resources: { cpu: 4, memoryGiB: 8 } },
@@ -37,14 +37,22 @@ test("parses the profile format from the report", () => {
 
 test("rejects an invalid profile with actionable issues", () => {
   assert.throws(
-    () => parseProfile({ apiVersion: "t3-daytona/v1", kind: "EnvironmentProfile" }),
+    () => parseProfile({ apiVersion: "t3x/v1", kind: "EnvironmentProfile" }),
     (err: unknown) => err instanceof ProfileValidationError,
   );
 });
 
+test("still parses profiles written under the old api version", () => {
+  // The profile contract was named after Daytona before the deployment moved
+  // to a self-hosted sandbox provider; stored profiles must keep working.
+  const profile = parseProfile({ ...base, apiVersion: "t3-daytona/v1" });
+  assert.equal(profile.metadata.name, "typescript-backend");
+  assert.equal(profile.apiVersion, "t3-daytona/v1");
+});
+
 test("parses YAML profiles", () => {
   const yaml = `
-apiVersion: t3-daytona/v1
+apiVersion: t3x/v1
 kind: EnvironmentProfile
 metadata:
   name: from-yaml
@@ -187,7 +195,7 @@ test("runtime.snapshot is optional: an image-backed profile parses and resolves"
         source: "global",
         name: "g",
         patch: {
-          apiVersion: "t3-daytona/v1",
+          apiVersion: "t3x/v1",
           kind: "EnvironmentProfile",
           metadata: { name: "image-backed", version: 1 },
           runtime: { resources: { cpu: 2, memoryGiB: 4 } },
