@@ -316,11 +316,16 @@ export class EventStore {
   claimDueEffects(limit = 10): EffectRecord[] {
     const now = Date.now();
     return this.db.tx(() => {
+      // `created_at` alone is not an order: effects submitted by one command
+      // share the millisecond, and their meaning depends on the order the
+      // command queued them (`task.ensure_ready` before its `turn.start`).
+      // `rowid` is insertion order, so it is the tiebreak that keeps a command's
+      // effects in the sequence it wrote them.
       const rows = this.db.handle
         .prepare(
           `SELECT * FROM effects
             WHERE status = 'pending' AND next_attempt_at <= ?
-            ORDER BY created_at ASC LIMIT ?`,
+            ORDER BY created_at ASC, rowid ASC LIMIT ?`,
         )
         .all(now, limit) as Array<Record<string, unknown>>;
       const claimed: EffectRecord[] = [];
@@ -378,7 +383,10 @@ export class EventStore {
 
   pendingEffectsForTask(taskId: string): EffectRecord[] {
     const rows = this.db.handle
-      .prepare(`SELECT * FROM effects WHERE task_id = ? AND status IN ('pending','running')`)
+      .prepare(
+        `SELECT * FROM effects WHERE task_id = ? AND status IN ('pending','running')
+          ORDER BY rowid ASC`,
+      )
       .all(taskId) as Array<Record<string, unknown>>;
     return rows.map((row) => this.rowToEffect(row));
   }

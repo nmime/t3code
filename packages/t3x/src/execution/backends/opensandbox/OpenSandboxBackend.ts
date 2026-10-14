@@ -275,7 +275,7 @@ export class OpenSandboxBackend implements SandboxBackend {
   private async request(
     route: string,
     init: RequestInit = {},
-    options: { tolerate404?: boolean } = {},
+    options: { tolerate404?: boolean; tolerateCodes?: readonly string[] } = {},
   ): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.apiKey) headers.set("OPEN-SANDBOX-API-KEY", this.apiKey);
@@ -295,6 +295,9 @@ export class OpenSandboxBackend implements SandboxBackend {
     if (response.status === 404 && options.tolerate404) return response;
 
     const detail = await readError(response);
+    // A redundant start/stop is not a failure: the provider answers 409 when a
+    // sandbox is already in the state the caller asked for.
+    if (options.tolerateCodes?.includes(detail.code)) return response;
     if (response.status === 404) {
       throw new SandboxNotFoundError(detail.message || route);
     }
@@ -460,12 +463,34 @@ export class OpenSandboxBackend implements SandboxBackend {
     return out;
   }
 
+  /**
+   * Start a paused sandbox.
+   *
+   * A sandbox that is already running has nothing to start, and the provider
+   * says so with 409 `DOCKER::SANDBOX_NOT_PAUSED`. That is the normal shape of
+   * a task suspended while other tasks kept the shared sandbox alive
+   * (`stopped_shared`), and of a resume that raced the reconcile sweep — it is
+   * a no-op, not a failure, so the effect is not left retrying it forever.
+   */
   async start(sandboxId: string): Promise<void> {
-    await this.request(`/v1/sandboxes/${encodeURIComponent(sandboxId)}/resume`, { method: "POST" });
+    await this.request(
+      `/v1/sandboxes/${encodeURIComponent(sandboxId)}/resume`,
+      { method: "POST" },
+      { tolerateCodes: ["DOCKER::SANDBOX_NOT_PAUSED"] },
+    );
   }
 
+  /**
+   * Pause a sandbox. Symmetric to `start`: pausing one that is already paused
+   * (two idle tasks on one shared sandbox, or a stop that raced the sweep)
+   * answers 409 `DOCKER::SANDBOX_NOT_RUNNING` and is a no-op.
+   */
   async stop(sandboxId: string): Promise<void> {
-    await this.request(`/v1/sandboxes/${encodeURIComponent(sandboxId)}/pause`, { method: "POST" });
+    await this.request(
+      `/v1/sandboxes/${encodeURIComponent(sandboxId)}/pause`,
+      { method: "POST" },
+      { tolerateCodes: ["DOCKER::SANDBOX_NOT_RUNNING"] },
+    );
   }
 
   /**

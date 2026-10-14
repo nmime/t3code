@@ -23,6 +23,9 @@ export interface TransitionResult {
   task: TaskRecord;
 }
 
+/** The states a new turn may start in. */
+const MESSAGE_ACCEPTING_STATES: TaskExecutionState[] = ["ready", "waiting", "running"];
+
 export class TaskStateMachine {
   constructor(private readonly store: EventStore) {}
 
@@ -67,10 +70,24 @@ export class TaskStateMachine {
   assertAcceptsMessages(taskId: string): TaskRecord {
     const record = this.store.getTask(taskId);
     if (!record) throw new TaskNotFoundError(taskId);
-    if (!["ready", "waiting", "running"].includes(record.state)) {
+    if (!MESSAGE_ACCEPTING_STATES.includes(record.state)) {
       throw new TaskStateError(taskId, record.state, "task does not accept messages");
     }
     return record;
+  }
+
+  /**
+   * Whether a message to this task is a turn.
+   *
+   * `false` does not mean the message is refused: a task the idle policy
+   * suspended, or one whose environment is still coming up, is woken by the
+   * message (`TaskService.sendMessage` queues `task.ensure_ready` ahead of the
+   * turn). Only `isTerminal` is a refusal.
+   */
+  acceptsMessages(taskId: string): boolean {
+    const record = this.store.getTask(taskId);
+    if (!record) throw new TaskNotFoundError(taskId);
+    return MESSAGE_ACCEPTING_STATES.includes(record.state);
   }
 
   isTerminal(state: TaskExecutionState): boolean {

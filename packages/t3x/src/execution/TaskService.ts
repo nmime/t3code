@@ -10,6 +10,7 @@ import type { TaskRecord, GitStatus, WorkspaceEntry } from "../contracts/executi
 import type { ProjectExecutionPolicy, SandboxScope } from "../contracts/sandboxScope.js";
 import {
   TaskNotFoundError,
+  TaskStateError,
   ExecutionError,
   CapabilityUnsupportedError,
 } from "../contracts/errors.js";
@@ -259,9 +260,30 @@ export class TaskService {
     return this.store.eventsSince(taskId, fromSeq, limit);
   }
 
-  /** Queue a message; the turn starts when the effect worker picks it up. */
+  /**
+   * Queue a message; the turn starts when the effect worker picks it up.
+   *
+   * A message is what wakes a task. The idle policy suspends a task whose
+   * sandbox it paused, and a task whose environment is still coming up cannot
+   * take a turn either — refusing those is what made the first message after an
+   * idle stop fail in T3's UI (`task does not accept messages`) while the
+   * control plane resumed the task underneath the failed run. So a message to a
+   * task that is not accepting queues `task.ensure_ready` *ahead of* its own
+   * `turn.start`, in the same command, and the worker executes them in order:
+   * the task is back before the turn is handed to it. Only a terminal task is
+   * refused — reviving it is a separate decision (`task.restore`).
+   */
   sendMessage(taskId: string, input: SendMessageInput): { runId: string; effectId: string } {
-    const task = this.states.assertAcceptsMessages(taskId);
+    const task = this.getTask(taskId);
+    const accepts = this.states.acceptsMessages(taskId);
+    if (!accepts && this.states.isTerminal(task.state)) {
+      throw new TaskStateError(taskId, task.state, "task does not accept messages");
+    }
+    // A `ready` task whose worker is gone cannot take the turn either — its
+    // sandbox is up and nothing is listening in it. Reattach before the turn
+    // rather than hand it to a socket that is not there.
+    const needsWake = !accepts || (task.state === "ready" && !this.registry.isConnected(taskId));
+    const wakeEffectId = needsWake ? newEffectId() : null;
     const runtimePolicy = this.resolveRuntimePolicy(task, input);
     const runId = newRunId();
     const effectId = newEffectId();
@@ -282,6 +304,14 @@ export class TaskService {
       kind: "message.send",
       payload: { text: input.text, runId },
       events: [
+        ...(wakeEffectId === null
+          ? []
+          : [
+              {
+                type: "task.wake_requested",
+                payload: { taskId, state: task.state, reason: "message" },
+              },
+            ]),
         {
           type: "message.accepted",
           payload: {
@@ -293,6 +323,16 @@ export class TaskService {
         },
       ],
       effects: [
+        ...(wakeEffectId === null
+          ? []
+          : [
+              {
+                effectId: wakeEffectId,
+                kind: "task.ensure_ready" as const,
+                payload: { taskId },
+                leaseEpoch: task.leaseEpoch,
+              },
+            ]),
         {
           effectId,
           kind: "turn.start",

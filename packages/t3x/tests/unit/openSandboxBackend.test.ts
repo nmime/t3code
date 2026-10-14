@@ -200,11 +200,30 @@ class FakeLifecycleServer {
         return;
       }
       if (action === "/pause") {
+        // The real server refuses a redundant pause/start with a 409 carrying a
+        // code (measured against the deployment): `DOCKER::SANDBOX_NOT_RUNNING`
+        // for a pause of a paused sandbox, `DOCKER::SANDBOX_NOT_PAUSED` for the
+        // reverse. The backend has to read that as "already in the state you
+        // asked for", not as a failure.
+        if (sandbox.state === "Paused") {
+          json(409, {
+            code: "DOCKER::SANDBOX_NOT_RUNNING",
+            message: "Sandbox is not in a running state.",
+          });
+          return;
+        }
         sandbox.state = "Paused";
         json(200, { id: sandbox.id, status: { state: sandbox.state } });
         return;
       }
       if (action === "/resume") {
+        if (sandbox.state === "Running") {
+          json(409, {
+            code: "DOCKER::SANDBOX_NOT_PAUSED",
+            message: "Sandbox is not in a paused state.",
+          });
+          return;
+        }
         sandbox.state = "Running";
         json(200, { id: sandbox.id, status: { state: sandbox.state } });
         return;
@@ -601,6 +620,24 @@ test("status and list map lifecycle states, and list keeps only t3x sandboxes", 
   const listed = await backend.list();
   assert.ok(!listed.some((sandbox) => sandbox.id === "foreign"));
   assert.ok(listed.some((sandbox) => sandbox.id === handle.id));
+});
+
+test("a redundant start or stop is a no-op, not a failure", async () => {
+  // Two tasks can share one sandbox: the second one to idle out is suspended
+  // while the sandbox stays running (`stopped_shared`), and a resume then asks
+  // the provider to start a sandbox that never stopped. The provider answers
+  // 409 `DOCKER::SANDBOX_NOT_PAUSED`; the backend must swallow it, or the
+  // resume effect retries forever and the task never comes back.
+  const handle = await backend.create(spec());
+  await backend.start(handle.id);
+  assert.equal((await backend.status(handle.id)).state, "running");
+
+  await backend.stop(handle.id);
+  await backend.stop(handle.id);
+  assert.equal((await backend.status(handle.id)).state, "paused");
+
+  await backend.start(handle.id);
+  assert.equal((await backend.status(handle.id)).state, "running");
 });
 
 test("status on a missing sandbox raises sandbox_not_found", async () => {

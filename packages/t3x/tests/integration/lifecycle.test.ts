@@ -176,6 +176,113 @@ test("scenario 4: interrupt, approve and resume remotely", async () => {
   }
 });
 
+test("a message to a suspended task wakes it, in the order it queued", async () => {
+  const stateDir = tempStateDir();
+  const server = await startTestServer({ stateDir });
+  try {
+    const task = await createTask(server);
+    await sendMessage(server, task.taskId, "first turn");
+    const sandboxId = server.tasks.getTask(task.taskId).sandboxId;
+
+    // What the idle policy does: pause the sandbox, suspend the task.
+    server.tasks.stop(task.taskId);
+    await server.effectWorker.drain();
+    assert.equal(server.tasks.getTask(task.taskId).state, "suspended");
+
+    // The message is accepted. A client does not have to resume the task first,
+    // and must not be told `task does not accept messages`: the wake is queued
+    // *ahead of* the turn, so the worker brings the task back before it hands it
+    // the turn.
+    server.tasks.sendMessage(task.taskId, { text: "after an idle stop" });
+    assert.deepEqual(
+      server.store.pendingEffectsForTask(task.taskId).map((effect) => effect.kind),
+      ["task.ensure_ready", "turn.start"],
+      "the wake runs first, the turn second",
+    );
+
+    await server.effectWorker.drain();
+    await waitFor(
+      () => server.tasks.getTask(task.taskId).state === "ready",
+      15_000,
+      "the turn to finish",
+    );
+
+    const events = server.tasks.events(task.taskId);
+    assert.ok(
+      events.some((e) => e.type === "task.wake_requested" && e.payload.state === "suspended"),
+      "the task's own history says why it came back",
+    );
+    assert.ok(
+      events.some((e) => e.type === "turn.terminal" && e.payload.status === "completed"),
+      "the turn ran on the woken task",
+    );
+    assert.equal(
+      server.tasks.getTask(task.taskId).sandboxId,
+      sandboxId,
+      "the resume kept the sandbox it had",
+    );
+  } finally {
+    await server.stop();
+  }
+});
+
+test("a message to a ready task whose worker is gone reattaches it first", async () => {
+  const stateDir = tempStateDir();
+  const server = await startTestServer({ stateDir });
+  try {
+    const task = await createTask(server);
+    const sandboxId = server.tasks.getTask(task.taskId).sandboxId;
+
+    // The sandbox is up, the task reads `ready`, and nothing is listening in
+    // it: the worker process died. A turn dispatched into that socket would
+    // fail; the message has to reattach first.
+    server.registry.dropSandboxConnection(sandboxId!, "worker died");
+    assert.equal(server.tasks.getTask(task.taskId).state, "ready");
+    assert.equal(server.registry.isConnected(task.taskId), false);
+
+    server.tasks.sendMessage(task.taskId, { text: "anyone there?" });
+    assert.deepEqual(
+      server.store.pendingEffectsForTask(task.taskId).map((effect) => effect.kind),
+      ["task.ensure_ready", "turn.start"],
+      "the reattach is queued ahead of the turn",
+    );
+
+    await server.effectWorker.drain();
+    await waitFor(
+      () => server.tasks.getTask(task.taskId).state === "ready",
+      30_000,
+      "the turn to finish",
+    );
+    assert.equal(server.registry.isConnected(task.taskId), true, "the worker is back");
+    assert.ok(
+      server.tasks
+        .events(task.taskId)
+        .some((e) => e.type === "turn.terminal" && e.payload.status === "completed"),
+      "the turn ran on the reattached worker",
+    );
+    assert.equal(server.tasks.getTask(task.taskId).sandboxId, sandboxId);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("a message to a terminal task is still refused", async () => {
+  const stateDir = tempStateDir();
+  const server = await startTestServer({ stateDir });
+  try {
+    const task = await createTask(server);
+    // `failed` is terminal: reviving it is `task.restore`, a separate decision,
+    // not something a message decides on its own.
+    server.store.updateTask(task.taskId, { state: "failed" });
+    assert.throws(
+      () => server.tasks.sendMessage(task.taskId, { text: "into the void" }),
+      /task does not accept messages/,
+    );
+  } finally {
+    await server.stop();
+  }
+});
+
 test("unsupported provider capabilities are refused, not faked", async () => {
   const stateDir = tempStateDir();
   const server = await startTestServer({ stateDir });
