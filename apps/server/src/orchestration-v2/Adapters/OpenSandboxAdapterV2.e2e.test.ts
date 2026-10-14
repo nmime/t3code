@@ -248,9 +248,52 @@ it.live(
             );
             // Two turns in the first thread (two user messages and two replies)
             // and one in the second.
-            if (projection.messages.length >= 4 && second.messages.length >= 2) return;
+            if (projection.messages.length >= 4 && second.messages.length >= 2) break;
             yield* Effect.sleep(Duration.seconds(1));
           }
+
+          // Suspend the task the way the idle policy does, then dispatch one
+          // more message into the same thread. The adapter has to resume the
+          // task and wait for its worker before the turn starts: the control
+          // plane refuses a message to a suspended task (`task does not accept
+          // messages`), and the resume it issues is an effect that answers
+          // before the worker is back. Found on the hosted app — the run failed
+          // in the UI while the sandbox was resumed underneath it.
+          const beforeSuspend = yield* Effect.promise(() =>
+            client.findTaskByThread(String(threadId)).catch(() => null),
+          );
+          assert.ok(beforeSuspend, "the thread has a task to suspend");
+          yield* Effect.promise(async () => {
+            server.tasks.stop(beforeSuspend!.taskId);
+            await server.effectWorker.drain();
+          });
+          const suspended = yield* Effect.promise(() => client.task(beforeSuspend!.taskId));
+          assert.equal(suspended.state, "suspended", "the idle stop suspended the task");
+
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("dispatch:opensandbox-e2e-3"),
+            threadId,
+            messageId: MessageId.make("message:opensandbox-e2e-3"),
+            text: "hello after an idle stop",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+
+          for (let attempt = 0; attempt < 90; attempt++) {
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            if (projection.messages.length >= 6) break;
+            yield* Effect.sleep(Duration.seconds(1));
+          }
+          const afterResume = yield* Effect.promise(() => client.task(beforeSuspend!.taskId));
+          assert.equal(afterResume.state, "ready", "the message resumed the task");
+          assert.equal(
+            afterResume.sandboxId,
+            beforeSuspend!.sandboxId,
+            "the resume reuses the sandbox instead of rebuilding it",
+          );
         }),
       }).pipe(
         Effect.provide(layerWithRegistry(scenario, registryLayer, { runEffectWorker: true })),
@@ -308,6 +351,20 @@ it.live(
         failedRuns.map((run) => run.failure),
         [],
         "neither turn failed",
+      );
+
+      // The turn dispatched into a *suspended* task: it only exists if the
+      // adapter resumed the task and waited for its worker before starting it.
+      assert.match(
+        text,
+        /echo\[full-access\]: hello after an idle stop/,
+        "the reply after an idle stop is in the projection",
+      );
+      assert.match(items, /echo\[full-access\]: hello after an idle stop/);
+      assert.equal(
+        projection.providerThreads.length,
+        1,
+        "the resumed turn reused the thread the earlier turns bound",
       );
 
       // The second thread, on the same shared provider session: its reply only

@@ -95,7 +95,24 @@ export const makeAdapter = (
   ): Promise<OpenSandboxTask> => {
     const existing = await client.findTaskByThread(threadId);
     if (existing) {
-      if (existing.state === "suspended") await client.resume(existing.taskId);
+      if (existing.state === "suspended") {
+        // A suspended task refuses messages, and the resume is an *effect* on
+        // the control plane: it answers before the worker is attached again.
+        // Dispatching the turn without waiting is what made the first message
+        // after an idle-stop fail — `task_state_invalid: Task … in state
+        // suspended: task does not accept messages` — while the control plane
+        // went on to resume the task a moment later, leaving the run failed in
+        // the UI and the sandbox resumed underneath it.
+        await client.resume(existing.taskId);
+        await waitForReady(client, existing.taskId, config.readyTimeoutMs ?? 300_000);
+        return await client.task(existing.taskId);
+      }
+      if (existing.state === "pending" || existing.state === "provisioning") {
+        // Provisioned but not up yet: wait rather than hand the turn to a state
+        // machine that would refuse it.
+        await waitForReady(client, existing.taskId, config.readyTimeoutMs ?? 300_000);
+        return await client.task(existing.taskId);
+      }
       return existing;
     }
     const task = await client.createTask({
@@ -380,11 +397,16 @@ export const makeAdapter = (
           Effect.tryPromise({
             try: async () => {
               const threadId = turnInput.threadId as unknown as string;
-              let task = tasks.get(threadId);
-              if (!task) {
-                task = await ensureTask(threadId, turnInput.modelSelection);
-                tasks.set(threadId, task);
-              }
+              // Re-check the task on every turn, even when this session already
+              // holds one: the control plane owns the task's state and the idle
+              // policy may have suspended it since the last turn. A cached task
+              // skips that check, and the message then hits the state machine —
+              // `task_state_invalid: Task … in state suspended: task does not
+              // accept messages` — while the control plane resumes the task a
+              // moment later, leaving the run failed in the UI. `ensureTask`
+              // resumes a suspended task and waits until it is ready again.
+              const task = await ensureTask(threadId, turnInput.modelSelection);
+              tasks.set(threadId, task);
               const started = await client.sendMessage(
                 task.taskId,
                 turnInput.message.text,
