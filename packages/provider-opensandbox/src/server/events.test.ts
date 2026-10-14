@@ -138,6 +138,61 @@ test("a turn carries the attempt T3 started, so it is the root turn", () => {
   assert.equal(turn.nodeId, "node:root");
 });
 
+test("a finished turn is closed in T3's projection, not only in the run", () => {
+  const mapper = new ProviderEventMapper(context());
+  mapper.map(
+    event(
+      "turn.updated",
+      { runId: "run_cp", providerTurn: { providerTurnId: "turn_cp", runId: "run_cp" } },
+      1,
+    ),
+  );
+  const mapped = mapper.map(
+    event("turn.terminal", { runId: "run_cp", providerTurnId: "turn_cp", status: "completed" }, 2),
+  );
+  assert.equal(mapped.length, 2, "the turn ends and the run ends");
+  const [turn, terminal] = mapped as Array<{
+    type: string;
+    providerTurn?: { id: string; status: string; completedAt: unknown };
+    status?: string;
+  }>;
+  // Without this first event T3's row for the turn keeps the `running` it was
+  // created with: `turn.terminal` ends the run, not the turn.
+  assert.equal(turn?.type, "provider_turn.updated");
+  assert.equal(turn?.providerTurn?.id, "turn_cp");
+  assert.equal(turn?.providerTurn?.status, "completed");
+  assert.ok(turn?.providerTurn?.completedAt, "a finished turn has an end time");
+  assert.equal(terminal?.type, "turn.terminal");
+  assert.equal(terminal?.status, "completed");
+});
+
+test("a failed turn is closed as failed", () => {
+  const mapper = new ProviderEventMapper(context());
+  mapper.map(
+    event(
+      "turn.updated",
+      { runId: "run_cp", providerTurn: { providerTurnId: "turn_cp", runId: "run_cp" } },
+      1,
+    ),
+  );
+  const [turn, terminal] = mapper.map(
+    event(
+      "turn.terminal",
+      {
+        runId: "run_cp",
+        providerTurnId: "turn_cp",
+        status: "failed",
+        failure: { message: "nope" },
+      },
+      2,
+    ),
+  ) as Array<{ type: string; providerTurn?: { status: string }; status?: string }>;
+  assert.equal(turn?.type, "provider_turn.updated");
+  assert.equal(turn?.providerTurn?.status, "failed");
+  assert.equal(terminal?.type, "turn.terminal");
+  assert.equal(terminal?.status, "failed");
+});
+
 test("a thread keeps the identity T3 holds and reports the worker's as native", () => {
   const mapper = new ProviderEventMapper(
     context({ providerThreadId: () => "provider-thread:row" }),

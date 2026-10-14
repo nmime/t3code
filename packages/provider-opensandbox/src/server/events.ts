@@ -256,10 +256,31 @@ export class ProviderEventMapper {
         const status =
           raw === "failed" ? "failed" : raw === "interrupted" ? "interrupted" : "completed";
         const existing = this.turns.get(providerTurnId);
-        if (existing) {
+        // End the *turn*, not only the run: `turn.terminal` below is what T3
+        // reads as "the run finished", and the row T3 projects for the turn
+        // would otherwise keep the `running` it was created with, forever. Every
+        // other driver emits the terminal `provider_turn.updated` alongside its
+        // `turn.terminal` (ClaudeAdapterV2, provider-muse). Only a turn this
+        // mapper saw start can be closed — one that arrived without its
+        // `turn.updated` has no row in T3 to correct.
+        const terminalTurn: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> =
+          existing === undefined
+            ? []
+            : [
+                {
+                  type: "provider_turn.updated",
+                  driver: this.context.driver,
+                  providerTurn: {
+                    ...existing,
+                    status,
+                    completedAt: DateTime.makeUnsafe(event.ts),
+                  },
+                },
+              ];
+        if (existing !== undefined) {
           this.turns.set(providerTurnId, {
             ...existing,
-            status: status === "failed" ? "failed" : status,
+            status,
             completedAt: DateTime.makeUnsafe(event.ts),
           });
         }
@@ -267,6 +288,7 @@ export class ProviderEventMapper {
         const runOrdinal = Math.max(1, existing?.ordinal ?? 1);
         if (status === "failed") {
           return [
+            ...terminalTurn,
             {
               type: "turn.terminal",
               driver: this.context.driver,
@@ -284,6 +306,7 @@ export class ProviderEventMapper {
           ];
         }
         return [
+          ...terminalTurn,
           {
             type: "turn.terminal",
             driver: this.context.driver,

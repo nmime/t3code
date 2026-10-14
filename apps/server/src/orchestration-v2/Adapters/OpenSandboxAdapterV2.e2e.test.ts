@@ -367,6 +367,23 @@ it.live(
         "the resumed turn reused the thread the earlier turns bound",
       );
 
+      // Every turn T3 projects is finished, not just every run. The run's end
+      // comes from `turn.terminal`; the turn's own row is only closed by the
+      // terminal `provider_turn.updated` the mapper emits beside it. Without it
+      // the row keeps the `running` it was created with, and the UI shows a
+      // finished turn as still going.
+      assert.ok(projection.providerTurns.length >= 3, "three turns were projected");
+      const unfinished = projection.providerTurns.filter((turn) => turn.status === "running");
+      assert.deepEqual(
+        unfinished.map((turn) => turn.id),
+        [],
+        "no turn is left running after its run completed",
+      );
+      assert.ok(
+        projection.providerTurns.every((turn) => turn.completedAt !== null),
+        "a finished turn carries its end time",
+      );
+
       // The second thread, on the same shared provider session: its reply only
       // exists if the adapter read that task's own event stream.
       const secondProjection = result.projections.get(secondThreadId);
