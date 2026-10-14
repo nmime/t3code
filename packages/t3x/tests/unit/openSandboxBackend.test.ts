@@ -209,6 +209,12 @@ class FakeLifecycleServer {
         json(200, { id: sandbox.id, status: { state: sandbox.state } });
         return;
       }
+      if (action === "/renew-expiration") {
+        const request = JSON.parse(body.toString("utf8")) as { expiresAt?: string };
+        if (request.expiresAt) sandbox.expiresAt = request.expiresAt;
+        json(200, { expiresAt: sandbox.expiresAt });
+        return;
+      }
       if (action === "/snapshots") {
         json(201, { id: `snapshot-${sandbox.id}`, name: "snap" });
         return;
@@ -430,7 +436,11 @@ test("create posts an image sandbox with resource caps, metadata and a keep-aliv
   assert.deepEqual(body.entrypoint, ["tail", "-f", "/dev/null"]);
   assert.deepEqual(body.resourceLimits, { cpu: "2000m", memory: "4096Mi" });
   assert.deepEqual(body.env, { T3X_TASK_ID: "task-1" });
-  assert.equal(body.timeout, 3600);
+  // `timeout` is the sandbox's absolute lifetime, not the profile's idle-stop:
+  // the spec below asks for 60 idle minutes, and the request must still carry
+  // the backend's lifetime (24 h unless the deployment says otherwise). Sending
+  // the idle minutes here killed a sandbox under a task that was using it.
+  assert.equal(body.timeout, 24 * 60 * 60);
   assert.deepEqual(body.metadata, { "t3x.task-id": "task-1", "t3x.managed": "true" });
   assert.deepEqual(body.platform, { os: "linux", arch: "amd64" });
   assert.equal(created.apiKey, API_KEY, "the API key travels on every call");
@@ -667,4 +677,49 @@ test("an unauthenticated server works when no key is configured", async () => {
   } finally {
     server.requireApiKey = true;
   }
+});
+
+test("the sandbox lifetime is the deployment's, not the profile's idle timeout", async () => {
+  const shortLived = await OpenSandboxBackend.create({
+    baseUrl,
+    apiKey: API_KEY,
+    defaultImage: "t3x-sandbox:latest",
+    defaultTimeoutSeconds: 3600,
+    readyTimeoutMs: 400,
+  });
+  assert.equal(shortLived.lifetimeSeconds(), 3600);
+  assert.equal(shortLived.lifetimeMs, 3_600_000);
+
+  await shortLived.create(spec({ stopAfterIdleMinutes: 5 }));
+  const created = [...server.requests]
+    .reverse()
+    .find((request) => request.method === "POST" && request.path === "/v1/sandboxes");
+  const body = JSON.parse(created!.body) as { timeout: number };
+  assert.equal(body.timeout, 3600, "the idle-stop minutes do not shorten the lifetime");
+
+  // The API's own floor is 60 seconds.
+  const floored = await OpenSandboxBackend.create({
+    baseUrl,
+    apiKey: API_KEY,
+    defaultTimeoutSeconds: 1,
+  });
+  assert.equal(floored.lifetimeSeconds(), 60);
+});
+
+test("renew pushes a sandbox's expiry forward and answers with the new deadline", async () => {
+  const handle = await backend.create(spec());
+  const requested = Date.now() + 24 * 60 * 60_000;
+
+  const expiresAt = await backend.renew(handle.id, requested);
+
+  const renewRequest = lastRequest(`/v1/sandboxes/${handle.id}/renew-expiration`);
+  assert.ok(renewRequest, "the renew request was sent");
+  assert.equal(renewRequest!.method, "POST");
+  assert.deepEqual(JSON.parse(renewRequest!.body), {
+    expiresAt: new Date(requested).toISOString(),
+  });
+  assert.equal(expiresAt, Date.parse(new Date(requested).toISOString()));
+
+  const status = await backend.status(handle.id);
+  assert.equal(status.autoStopAt, expiresAt, "the status reports the renewed deadline");
 });

@@ -78,6 +78,21 @@ export interface SandboxBackend {
   stop(sandboxId: string): Promise<void>;
   destroy(sandboxId: string): Promise<void>;
 
+  /**
+   * How long a freshly created sandbox may live, when the backend imposes a
+   * lifetime of its own. A backend that never expires a sandbox leaves this
+   * undefined and there is nothing to renew.
+   */
+  readonly lifetimeMs?: number;
+
+  /**
+   * Push a sandbox's own expiry forward and answer with the new deadline
+   * (epoch milliseconds). The control plane renews a live task's sandbox so a
+   * long-running task is not destroyed under it by the provider's lifetime;
+   * the provider's idle-stop remains the control plane's own policy.
+   */
+  renew?(sandboxId: string, expiresAtMs: number): Promise<number>;
+
   snapshot(sandboxId: string, name: string): Promise<{ id: string }>;
   restoreSnapshot(sandboxId: string, snapshotId: string): Promise<void>;
 

@@ -67,11 +67,16 @@ OpenSandbox (the sandbox provider):
                        https://sandbox.example.com)
   OPENSANDBOX_API_KEY  the server's api_key, sent as OPEN-SANDBOX-API-KEY
   OPENSANDBOX_IMAGE    image every image-backed profile is built from
+  OPENSANDBOX_SANDBOX_TIMEOUT_SECONDS
+                       absolute sandbox lifetime in seconds (default 86400).
+                       This is a backstop, not the idle policy: the control
+                       plane renews it while a task is alive, and stops an
+                       idle sandbox through its own policy
   OPENSANDBOX_PUBLIC_URL
                        root used for browser-facing preview URLs, when it is not
                        the same as OPENSANDBOX_API_URL
-  --opensandbox-url / --opensandbox-api-key / --opensandbox-image override the
-  variables for one run.
+  --opensandbox-url / --opensandbox-api-key / --opensandbox-image /
+  --opensandbox-timeout-seconds override the variables for one run.
 
 Sandbox scope (the "Run this task in a new sandbox" toggle):
   default            one shared sandbox per project/repository, one git
@@ -226,6 +231,14 @@ async function withServer<T>(
       ...((flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE)
         ? { defaultImage: flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE }
         : {}),
+      ...((flags["opensandbox-timeout-seconds"] ?? process.env.OPENSANDBOX_SANDBOX_TIMEOUT_SECONDS)
+        ? {
+            defaultTimeoutSeconds: Number(
+              flags["opensandbox-timeout-seconds"] ??
+                process.env.OPENSANDBOX_SANDBOX_TIMEOUT_SECONDS,
+            ),
+          }
+        : {}),
     },
   });
   const server = await ControlPlaneServer.start({
@@ -251,6 +264,8 @@ async function serve(args: string[]): Promise<void> {
   const sandboxUrl = flags["opensandbox-url"] ?? process.env.OPENSANDBOX_API_URL;
   const sandboxKey = flags["opensandbox-api-key"] ?? process.env.OPENSANDBOX_API_KEY;
   const sandboxImage = flags["opensandbox-image"] ?? process.env.OPENSANDBOX_IMAGE;
+  const sandboxTimeout =
+    flags["opensandbox-timeout-seconds"] ?? process.env.OPENSANDBOX_SANDBOX_TIMEOUT_SECONDS;
   const backend = await createSandboxBackend({
     stateDir,
     kind: backendKind,
@@ -258,6 +273,7 @@ async function serve(args: string[]): Promise<void> {
       ...(sandboxUrl ? { baseUrl: sandboxUrl } : {}),
       ...(sandboxKey ? { apiKey: sandboxKey } : {}),
       ...(sandboxImage ? { defaultImage: sandboxImage } : {}),
+      ...(sandboxTimeout ? { defaultTimeoutSeconds: Number(sandboxTimeout) } : {}),
     },
   });
 
@@ -283,6 +299,11 @@ async function serve(args: string[]): Promise<void> {
       `  sandbox api:  ${sandboxUrl ?? `${OPENSANDBOX_DEFAULT_BASE_URL} (local default)`}`,
     );
     console.log(`  sandbox image: ${sandboxImage ?? `${OPENSANDBOX_DEFAULT_IMAGE} (default)`}`);
+    const lifetime =
+      flags["opensandbox-timeout-seconds"] ?? process.env.OPENSANDBOX_SANDBOX_TIMEOUT_SECONDS;
+    console.log(
+      `  sandbox life: ${lifetime ? `${lifetime}s` : "24h (default)"} — renewed while a task is alive; idle-stop is policy, not this`,
+    );
   }
   console.log(
     `  worker bundle:${flags["worker-bundle"] ? ` ${path.resolve(flags["worker-bundle"])}` : " none (the sandbox must already carry the worker)"}`,

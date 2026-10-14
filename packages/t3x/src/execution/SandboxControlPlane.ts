@@ -28,6 +28,7 @@ import * as path from "node:path";
 import type {
   SandboxControlPlane as SandboxControlPlanePort,
   ReconcileReport,
+  SandboxStatus,
   TaskRecord,
 } from "../contracts/execution.js";
 import {
@@ -1249,6 +1250,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       reattached: 0,
       restored: 0,
       stopped: 0,
+      renewed: 0,
       destroyedOrphans: 0,
       notes: [],
     };
@@ -1271,14 +1273,25 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
         continue;
       }
 
-      if (status.state === "stopped") {
-        report.notes.push(`${task.taskId}: sandbox stopped, marking suspended`);
+      // A paused sandbox is a stopped one: the container is there, the worker
+      // is frozen, and a message resumes it. Treating it as live made the
+      // sweep try to reattach a worker inside a paused container.
+      if (status.state === "stopped" || status.state === "paused") {
+        const paused = status.state === "paused";
+        report.notes.push(
+          `${task.taskId}: sandbox ${paused ? "paused" : "stopped"}, marking suspended`,
+        );
         if (task.state !== "suspended") {
-          this.states().transition(task.taskId, "suspended", { reason: "reconcile_stopped" });
+          this.states().transition(task.taskId, "suspended", {
+            reason: paused ? "reconcile_paused" : "reconcile_stopped",
+          });
         }
         report.stopped += 1;
         continue;
       }
+
+      // The provider's lifetime is a backstop, not a schedule.
+      if (task.sandboxId) await this.renewLifetime(task.sandboxId, status, report);
 
       // A shared sandbox is served by one worker: make sure the task is
       // recorded as bound to it, then check that worker.
@@ -1313,6 +1326,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
       if (status.state === "running" && sandbox.state !== "running") {
         this.projects.updateSandbox(sandbox.sandboxId, { state: "running" });
       }
+      await this.renewLifetime(sandbox.sandboxId, status, report);
     }
 
     // Orphan sandboxes: created for tasks this control plane no longer tracks.
@@ -1329,6 +1343,35 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
     }
 
     return report;
+  }
+
+  /**
+   * Keep a live sandbox alive. The provider's `timeout` is an absolute
+   * lifetime, so without this a task's sandbox is destroyed under it once the
+   * lifetime elapses and the next sweep rebuilds the environment from scratch
+   * — new container, new worker upload, lost provider-native session.
+   *
+   * Renewal is deliberately lazy: only when less than half the lifetime is
+   * left, so a deployment whose sandboxes are short-lived anyway makes no
+   * calls. Backends without a lifetime of their own (`lifetimeMs` undefined)
+   * and without a `renew` are left alone.
+   */
+  private async renewLifetime(
+    sandboxId: string,
+    status: SandboxStatus,
+    report: ReconcileReport,
+  ): Promise<void> {
+    const renew = this.backend.renew?.bind(this.backend);
+    const lifetimeMs = this.backend.lifetimeMs;
+    if (!renew || typeof lifetimeMs !== "number" || lifetimeMs <= 0) return;
+    if (status.state !== "running" || status.autoStopAt === null) return;
+    if (status.autoStopAt - Date.now() >= lifetimeMs / 2) return;
+    const expiresAt = await renew(sandboxId, Date.now() + lifetimeMs).catch(() => null);
+    if (expiresAt === null) return;
+    report.renewed += 1;
+    report.notes.push(
+      `sandbox ${sandboxId}: lifetime renewed to ${new Date(expiresAt).toISOString()}`,
+    );
   }
 
   requireConnection(taskId: string): void {

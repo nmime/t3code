@@ -134,6 +134,8 @@ export interface ReconcileReport {
   reattached: number;
   restored: number;
   stopped: number;
+  /** Sandboxes whose provider-side lifetime was pushed forward. */
+  renewed: number;
   destroyedOrphans: number;
   notes: string[];
 }

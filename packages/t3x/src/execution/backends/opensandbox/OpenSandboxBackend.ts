@@ -20,7 +20,7 @@
  * reverse proxy at `/v1/sandboxes/{id}/proxy/44772/…` (44772 is execd's
  * in-container port).
  *
- * Four properties of the real API shape this file, each verified against a
+ * Five properties of the real API shape this file, each verified against a
  * running server (opensandbox-server 1.1.1) before it was written:
  *
  *  - the proxy path is the *only* sandbox path exempt from the API key, which
@@ -32,7 +32,11 @@
  *  - a background command's id is the text of its `init` event; the HTTP
  *    response body has no id field;
  *  - file upload is multipart where the metadata is itself a *file part* — a
- *    plain form field is rejected with `INVALID_FILE_METADATA`.
+ *    plain form field is rejected with `INVALID_FILE_METADATA`;
+ *  - `timeout` on create is an *absolute lifetime* (`expiresAt = createdAt +
+ *    timeout`, capped by the server's `max_sandbox_timeout_seconds`), never an
+ *    idle timer — and `POST /v1/sandboxes/{id}/renew-expiration` moves
+ *    `expiresAt` forward without being subject to that cap.
  *
  * Sandboxes are created with an entrypoint that only keeps the container alive
  * (`tail -f /dev/null`); the control plane uploads the worker bundle into the
@@ -89,7 +93,12 @@ export interface OpenSandboxBackendOptions {
   entrypoint?: string[];
   /** execd port inside the sandbox. */
   execdPort?: number;
-  /** Sandbox lifetime when the profile names no idle timeout. */
+  /**
+   * How long a sandbox may live, in seconds — the *absolute* lifetime asked of
+   * the provider (`expiresAt = createdAt + this`). A profile's
+   * `stopAfterIdleMinutes` is not this: idleness is the control plane's own
+   * policy, and a live task's sandbox is renewed before this runs out.
+   */
   defaultTimeoutSeconds?: number;
   /** How long to wait for execd inside a new sandbox. */
   readyTimeoutMs?: number;
@@ -225,6 +234,16 @@ export class OpenSandboxBackend implements SandboxBackend {
     return backend;
   }
 
+  /** The lifetime a freshly created sandbox is given, in seconds. */
+  lifetimeSeconds(): number {
+    return Math.max(60, Math.round(this.defaultTimeoutSeconds));
+  }
+
+  /** The same lifetime in milliseconds, for the control plane's renewal math. */
+  get lifetimeMs(): number {
+    return this.lifetimeSeconds() * 1000;
+  }
+
   /** `GET /health` — public route, no API key needed. */
   async ping(): Promise<{ status: string; version: string | null }> {
     const response = await this.fetchImpl(`${this.baseUrl}/health`).catch((cause: unknown) => {
@@ -311,12 +330,15 @@ export class OpenSandboxBackend implements SandboxBackend {
     };
     if (spec.snapshot) metadata["t3x.profile"] = spec.snapshot;
 
-    const timeoutSeconds = Math.max(
-      60,
-      Math.round(
-        spec.stopAfterIdleMinutes > 0 ? spec.stopAfterIdleMinutes * 60 : this.defaultTimeoutSeconds,
-      ),
-    );
+    // `timeout` on this API is an absolute lifetime, not an idle timer.
+    // Sending the profile's `stopAfterIdleMinutes` here made every sandbox die
+    // thirty minutes after it was created — under a task that was using it —
+    // and the sweep then rebuilt the environment from scratch (39 sandboxes
+    // for one idle task). Idle-stop is the control plane's own policy
+    // (PolicyEngine); this lifetime is only a backstop for a control plane
+    // that never comes back, and `renew()` pushes it forward while a task is
+    // alive.
+    const timeoutSeconds = this.lifetimeSeconds();
 
     const body: Record<string, unknown> = {
       ...(spec.snapshot ? { snapshotId: spec.snapshot } : { image: { uri: this.defaultImage } }),
@@ -444,6 +466,30 @@ export class OpenSandboxBackend implements SandboxBackend {
 
   async stop(sandboxId: string): Promise<void> {
     await this.request(`/v1/sandboxes/${encodeURIComponent(sandboxId)}/pause`, { method: "POST" });
+  }
+
+  /**
+   * Push a sandbox's `expiresAt` forward (`POST …/renew-expiration`). That
+   * route is not subject to the creation-time `max_sandbox_timeout_seconds`
+   * cap, so a long-lived task keeps the sandbox it has — with its working
+   * tree, its installed dependencies and its provider-native session — instead
+   * of a fresh one every lifetime.
+   *
+   * Returns the new `expiresAt` in epoch milliseconds (the requested value when
+   * the server answers without one).
+   */
+  async renew(sandboxId: string, expiresAtMs: number): Promise<number> {
+    const response = await this.request(
+      `/v1/sandboxes/${encodeURIComponent(sandboxId)}/renew-expiration`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expiresAt: new Date(expiresAtMs).toISOString() }),
+      },
+    );
+    const body = (await response.json().catch(() => ({}))) as { expiresAt?: string };
+    const parsed = body.expiresAt ? Date.parse(body.expiresAt) : Number.NaN;
+    return Number.isFinite(parsed) ? parsed : expiresAtMs;
   }
 
   async destroy(sandboxId: string): Promise<void> {
