@@ -130,11 +130,11 @@ export class CliRuntime implements WorkerProviderRuntime {
     });
 
     const prompt = payload.message.text;
-    const command = this.config.command
-      .split("$PROMPT")
-      .join(shellQuote(prompt))
-      .split("$CWD")
-      .join(shellQuote(thread.cwd));
+    const command = substituteCommand(
+      substituteCommand(this.config.command, "$CWD", thread.cwd),
+      "$PROMPT",
+      prompt,
+    );
 
     const child = spawn("bash", ["-c", command], {
       cwd: thread.cwd,
@@ -316,11 +316,11 @@ export class CliRuntime implements WorkerProviderRuntime {
    */
   async textGenerate(payload: TextGeneratePayload): Promise<{ text: string }> {
     const cwd = payload.cwd ?? process.cwd();
-    const command = this.config.command
-      .split("$PROMPT")
-      .join(shellQuote(payload.prompt))
-      .split("$CWD")
-      .join(shellQuote(cwd));
+    const command = substituteCommand(
+      substituteCommand(this.config.command, "$CWD", cwd),
+      "$PROMPT",
+      payload.prompt,
+    );
     return await new Promise<{ text: string }>((resolve, reject) => {
       const child = spawn("bash", ["-c", command], {
         cwd,
@@ -383,4 +383,32 @@ export class CliRuntime implements WorkerProviderRuntime {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Escape a value for the inside of a double-quoted shell word. */
+function doubleQuoteEscape(value: string): string {
+  return value.replace(/([\\"$`])/g, "\\$1");
+}
+
+/**
+ * Substitute a placeholder in a command template, so the value is always one
+ * shell word.
+ *
+ * The escaping depends on where the placeholder sits in the template, which is
+ * why this cannot be a plain string replace: a placeholder inside double quotes
+ * needs the value escaped for that context, one inside single quotes needs the
+ * quote closed and reopened around it, and a bare one is replaced with a
+ * single-quoted word. Quoting unconditionally is what broke the OpenClaw
+ * runtime — `--config "$CWD/.openclaw/openclaw.json5"` became
+ * `--config "'/workspace/project'/.openclaw/openclaw.json5"`, which is not a
+ * path — and it also wrapped every codex prompt in literal quotes.
+ */
+export function substituteCommand(command: string, placeholder: string, value: string): string {
+  const pattern = new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+  return command.replace(pattern, (_match: string, offset: number) => {
+    const preceding = command[offset - 1];
+    if (preceding === '"') return doubleQuoteEscape(value);
+    if (preceding === "'") return `'${shellQuote(value)}'`;
+    return shellQuote(value);
+  });
 }

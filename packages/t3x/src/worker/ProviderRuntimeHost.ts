@@ -87,7 +87,11 @@ export class ProviderRuntimeHost {
         // all. The sandbox is the isolation boundary here — the CLI runs as the
         // only tenant of a throwaway container — so the check buys nothing and
         // costs every repository-less task its turn.
-        command: 'codex exec --skip-git-repo-check "$PROMPT"',
+        //
+        // `$PROMPT` and `$CWD` are bare on purpose: the worker substitutes a
+        // value that is already one shell word (see `substituteCommand`), so
+        // quoting them here would put the quotes *inside* the argument.
+        command: "codex exec --skip-git-repo-check $PROMPT",
         configEnv: { CODEX_HOME: `${options.configHome}/.codex` },
       },
       openclaw: {
@@ -101,7 +105,7 @@ export class ProviderRuntimeHost {
         // the file names the credential through an env reference instead of
         // carrying it (see the profile's setup step).
         command:
-          'openclaw agent exec --config "$CWD/.openclaw/openclaw.json5" --model omniroute/auto/best-coding "$PROMPT"',
+          "openclaw agent exec --config $CWD/.openclaw/openclaw.json5 --model omniroute/auto/best-coding $PROMPT",
         configEnv: {
           // State stays inside the task's workspace: one sandbox per task, so
           // there is nothing to share and nothing to leak between them.
@@ -110,17 +114,17 @@ export class ProviderRuntimeHost {
       },
       claude: {
         driver: "claude",
-        command: 'claude -p "$PROMPT"',
+        command: "claude -p $PROMPT",
         configEnv: { CLAUDE_CONFIG_DIR: `${options.configHome}/.claude` },
       },
       opencode: {
         driver: "opencode",
-        command: 'opencode run "$PROMPT"',
+        command: "opencode run $PROMPT",
         configEnv: { OPENCODE_CONFIG_DIR: `${options.configHome}/.config/opencode` },
       },
       pi: {
         driver: "pi",
-        command: 'pi --prompt "$PROMPT"',
+        command: "pi --prompt $PROMPT",
         configEnv: { PI_HOME: `${options.configHome}/.pi` },
       },
       ...(options.cliAgents ?? {}),
