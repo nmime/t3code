@@ -63,8 +63,11 @@ export function controlPlaneTools(context: ToolContext): McpToolDefinition[] {
       handler: async () => {
         const health = await client.health();
         const profiles = await client.listProfiles();
-        const names = profiles.profiles.map((profile) =>
-          String(profile.profileId ?? profile.id ?? "?"),
+        const names = profiles.profiles.map(
+          // Every version of a profile shares its id, so the version is what
+          // makes the list readable — `default@v4`, not `default` four times.
+          (profile) =>
+            `${String(profile.profileId ?? profile.id ?? "?")}@v${String(profile.version ?? "?")}`,
         );
         return ok(
           `T3 control plane at ${client.baseUrl} answered ok=true with ${health.tasks} task(s). ` +
