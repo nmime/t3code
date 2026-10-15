@@ -144,6 +144,12 @@ export class CliRuntime implements WorkerProviderRuntime {
         ...(this.config.env ?? {}),
         T3X_PROVIDER: this.driver,
       },
+      // stdin closed, stdout/stderr piped: an agent CLI reads stdin when it is
+      // a pipe rather than a terminal, and then waits for an EOF that never
+      // comes (`codex exec` printed "Reading additional input from stdin..."
+      // and sat there until the turn was interrupted). Nothing here is
+      // interactive — the prompt is an argument.
+      stdio: ["ignore", "pipe", "pipe"],
       // Own process group: the agent is a tree (bash → codex → its children),
       // and an interrupt has to reach the whole tree, not just the outer shell.
       detached: true,
@@ -301,6 +307,8 @@ export class CliRuntime implements WorkerProviderRuntime {
           ...(this.config.env ?? {}),
           T3X_PROVIDER: this.driver,
         },
+        // See startTurn: a piped stdin makes a CLI agent wait for an EOF.
+        stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       });
       let stdout = "";

@@ -333,3 +333,40 @@ test("sandbox preview URLs are signed and expiring", async () => {
     await server.stop();
   }
 });
+
+test("a CLI agent gets a closed stdin, so it cannot wait for input that never comes", async () => {
+  const stateDir = tempStateDir();
+  // `read` returns on data or on EOF. With an open pipe and no writer it never
+  // returns — which is exactly what `codex exec` did inside a real sandbox: it
+  // printed "Reading additional input from stdin..." and the turn hung until
+  // it was interrupted. The prompt is an argument; nothing here is interactive.
+  const binDir = fakeAgentBinDir(
+    [
+      "#!/usr/bin/env bash",
+      'if read -r line; then echo "agent read: $line"; else echo "agent saw EOF on stdin"; fi',
+      "echo agent-finished",
+    ].join("\n"),
+  );
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${binDir}:${originalPath}`;
+  const server = await startTestServer({ stateDir });
+  try {
+    server.profiles.createProfile({ profileId: "stdin", body: testProfile() as never });
+    const task = await createTask(server, { profileId: "stdin", provider: "codex" });
+    await sendMessage(server, task.taskId, "hello");
+    await waitFor(
+      () => server.tasks.events(task.taskId).some((e) => e.type === "turn.terminal"),
+      20_000,
+      "the turn ended instead of waiting on stdin",
+    );
+    const events = server.tasks.events(task.taskId);
+    assert.ok(
+      events.some((e) => JSON.stringify(e.payload).includes("agent saw EOF on stdin")),
+      "the agent read EOF rather than blocking forever",
+    );
+    assert.ok(events.some((e) => JSON.stringify(e.payload).includes("agent-finished")));
+  } finally {
+    await server.stop();
+    process.env.PATH = originalPath;
+  }
+});
