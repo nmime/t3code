@@ -288,19 +288,21 @@ the task and, if its sandbox is gone, creates a new one from the same profile.
 
 ## 8. Troubleshooting
 
-| Symptom                                                                                 | Cause                                                                                                                                             | Fix                                                                                                                                                  |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task_state_invalid: … does not accept messages`                                        | the message was dispatched before a suspended task finished resuming                                                                              | fixed in the driver (it waits for `ready`); on an old build, send the message again                                                                  |
-| `task.worker_attach_failed`                                                             | the sandbox could not dial the control plane (network policy, wrong `PUBLIC_URL`)                                                                 | make the control plane reachable from inside the sandbox; check `OPENSANDBOX_*` in `/etc/t3x/env`                                                    |
-| A turn hangs after `turn.start`, log ends with `Reading additional input from stdin…`   | an agent CLI reading a piped stdin and waiting for an EOF                                                                                         | the worker spawns agents with stdin closed; update the worker bundle                                                                                 |
-| `Not inside a trusted directory and --skip-git-repo-check was not specified`            | codex refuses to run outside a repository                                                                                                         | the command template carries `--skip-git-repo-check`; update the worker bundle                                                                       |
-| `apply_patch: command not found` in the worker log, then the agent writes with `printf` | the image has no `apply_patch` (it is the codex binary, dispatched on `argv[0]`)                                                                  | rebuild the image from the current Dockerfile (it links it) — and delete the sandboxes first                                                         |
-| The reply never appears in the thread though the turn ended                             | the agent's runtime never closed its assistant stream (`streaming: true` with no final update)                                                    | fixed on both sides (the worker closes it, the mapper closes what a run left open); update both halves                                               |
-| `Thread title generation failed` in the app log                                         | the generation names an instance the app host cannot run (the default is the local Codex provider, and a sandbox deployment has no `codex` there) | Settings → Providers → **Text generation model** → the sandbox instance; the request also has to name the thread, which the app does since `e9a7ed8` |
-| `PR lookup failed` every ~30 s                                                          | no source-control provider is registered for the project                                                                                          | harmless (now logged quietly); connect a source-control provider to get PR badges                                                                    |
-| The page sits on "Still connecting", `/ws` answers 401                                  | nginx forwarded `$host` and dropped a non-default port, so the app refused the cookie-carrying request                                            | `proxy_set_header Host $http_host;`                                                                                                                  |
-| A provider instance reads "Unavailable"                                                 | its driver is not registered in this build, or the control plane URL/token is wrong                                                               | Settings → Providers: the driver is `opensandbox`; the status line names which of the three checks failed                                            |
-| `database is locked`                                                                    | a CLI command started an effect worker against a live deployment                                                                                  | use the HTTP API for a running deployment                                                                                                            |
+| Symptom                                                                                 | Cause                                                                                                                                             | Fix                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task_state_invalid: … does not accept messages`                                        | the message was dispatched before a suspended task finished resuming                                                                              | fixed in the driver (it waits for `ready`); on an old build, send the message again                                                                                                                          |
+| `task.worker_attach_failed`                                                             | the sandbox could not dial the control plane (network policy, wrong `PUBLIC_URL`)                                                                 | make the control plane reachable from inside the sandbox; check `OPENSANDBOX_*` in `/etc/t3x/env`                                                                                                            |
+| A turn hangs after `turn.start`, log ends with `Reading additional input from stdin…`   | an agent CLI reading a piped stdin and waiting for an EOF                                                                                         | the worker spawns agents with stdin closed; update the worker bundle                                                                                                                                         |
+| `Not inside a trusted directory and --skip-git-repo-check was not specified`            | codex refuses to run outside a repository                                                                                                         | the command template carries `--skip-git-repo-check`; update the worker bundle                                                                                                                               |
+| `apply_patch: command not found` in the worker log, then the agent writes with `printf` | the image has no `apply_patch` (it is the codex binary, dispatched on `argv[0]`)                                                                  | rebuild the image from the current Dockerfile (it links it) — and delete the sandboxes first                                                                                                                 |
+| The reply never appears in the thread though the turn ended                             | the agent's runtime never closed its assistant stream (`streaming: true` with no final update)                                                    | fixed on both sides (the worker closes it, the mapper closes what a run left open); update both halves                                                                                                       |
+| `Thread title generation failed` in the app log                                         | the generation names an instance the app host cannot run (the default is the local Codex provider, and a sandbox deployment has no `codex` there) | Settings → Providers → **Text generation model** → the sandbox instance; the request also has to name the thread, which the app does since `e9a7ed8`                                                         |
+| `PR lookup failed` every ~30 s                                                          | no source-control provider is registered for the project                                                                                          | harmless (now logged quietly); connect a source-control provider to get PR badges                                                                                                                            |
+| The page sits on "Still connecting", `/ws` answers 401                                  | nginx forwarded `$host` and dropped a non-default port, so the app refused the cookie-carrying request                                            | `proxy_set_header Host $http_host;`                                                                                                                                                                          |
+| A provider instance reads "Unavailable"                                                 | its driver is not registered in this build, or the control plane URL/token is wrong                                                               | Settings → Providers: the driver is `opensandbox`; the status line names which of the three checks failed                                                                                                    |
+| `database is locked`                                                                    | a CLI command started an effect worker against a live deployment                                                                                  | use the HTTP API for a running deployment                                                                                                                                                                    |
+| `This host blocks the sandbox T3's browser runs in`                                     | Ubuntu 23.10+ restricts unprivileged user namespaces through AppArmor, so Chrome's own sandbox cannot start                                       | `sudo env "PATH=$PATH" node apps/server/dist/bin.mjs browser setup --base-dir /var/lib/t3app/.t3` (writes one AppArmor profile; it installs the browser's libraries too if the browser is already installed) |
+| The app's own headless browser is missing libraries after its first use                 | the browser downloads on first use and needs Debian libraries the host may not have                                                               | run `browser setup` again — it installs exactly the libraries the loader reports                                                                                                                             |
 
 ## 9. Where everything lives
 
@@ -314,3 +316,54 @@ the task and, if its sandbox is gone, creates a new one from the same profile.
 | Provider instance | `/var/lib/t3app/.t3/userdata/settings.json` → `providerInstances.<id>`                      |
 | Profile           | control-plane state (`t3x profile list`); the file lives in `/etc/t3x/profile-*.yaml`       |
 | Secrets           | control-plane state, encrypted with `/var/lib/t3x/secret.key` (`t3x secret list`)           |
+
+## 10. Keeping up with upstream
+
+The fork tracks `pingdotgg/t3code` on `main`; the deployment is `feat/opensandbox`.
+The two halves (`packages/t3x`, `packages/provider-opensandbox`) sit beside
+upstream's tree, so an upstream batch lands mostly as new files.
+
+```bash
+git remote add upstream https://github.com/pingdotgg/t3code.git   # once
+git fetch upstream --tags
+git checkout main && git merge --ff-only upstream/main && git push origin main
+git checkout feat/opensandbox && git merge main
+```
+
+Two things need a decision every time:
+
+- **`.github/workflows/*`.** GitHub refuses any push that touches a workflow file
+  unless the token carries the _Workflows_ permission, and the tokens here do not.
+  When upstream changes one, keep the fork's revision
+  (`git checkout origin/main -- .github/workflows/<file>`) in a small commit of its
+  own, and say so in the message — otherwise nothing else can be pushed.
+- **`pnpm-lock.yaml`.** It conflicts almost always. Take upstream's
+  (`git checkout main -- pnpm-lock.yaml`), then run `pnpm install` so the lockfile
+  also carries the fork's two workspace packages, and commit the result.
+
+Then re-verify, in this order — each step catches a different kind of drift:
+
+```bash
+pnpm --filter @t3tools/t3x build && node --test --test-concurrency=1 \
+  packages/t3x/dist/tests/unit/*.test.js packages/t3x/dist/tests/integration/*.test.js
+pnpm --filter @t3tools/provider-opensandbox exec tsc --noEmit -p tsconfig.json
+node --test packages/provider-opensandbox/src/server/*.test.ts
+pnpm --filter t3 typecheck
+pnpm --filter t3 exec vp test run src/orchestration-v2/Adapters/OpenSandboxAdapterV2.e2e.test.ts
+pnpm --filter t3 build:bundle
+```
+
+The e2e test is the one that matters most: it drives a `thread.create` and a
+`message.dispatch` through T3's real orchestrator, session manager, ingestor and
+projection over the OpenSandbox adapter, against a real control plane and worker.
+It is where an upstream change to the orchestration contracts shows up. It needs
+`packages/t3x/dist` built first, because it imports the control plane from there.
+
+Deploy afterwards exactly as in §7 — and note that upstream batches move the app
+half (`pnpm install`, `build:bundle`, restart), while `packages/t3x` moves the
+control plane half (`build`, `worker bundle`, `restart t3x`).
+
+Where the fork had to follow upstream's own drift, the merge commit says why:
+`afterSteps` in the scenario testkit widened to allow the orchestrator service and
+its error, the adapter registry's new `McpProviderSessions` requirement, and run
+failures moving from the run record to the turn item (`latestRootProviderFailure`).
