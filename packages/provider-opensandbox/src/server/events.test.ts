@@ -151,7 +151,7 @@ test("a finished turn is closed in T3's projection, not only in the run", () => 
     event("turn.terminal", { runId: "run_cp", providerTurnId: "turn_cp", status: "completed" }, 2),
   );
   assert.equal(mapped.length, 2, "the turn ends and the run ends");
-  const [turn, terminal] = mapped as Array<{
+  const [turn, terminal] = mapped as ReadonlyArray<{
     type: string;
     providerTurn?: { id: string; status: string; completedAt: unknown };
     status?: string;
@@ -225,7 +225,7 @@ test("a failed turn is closed as failed", () => {
       },
       2,
     ),
-  ) as Array<{ type: string; providerTurn?: { status: string }; status?: string }>;
+  ) as ReadonlyArray<{ type: string; providerTurn?: { status: string }; status?: string }>;
   assert.equal(turn?.type, "provider_turn.updated");
   assert.equal(turn?.providerTurn?.status, "failed");
   assert.equal(terminal?.type, "turn.terminal");

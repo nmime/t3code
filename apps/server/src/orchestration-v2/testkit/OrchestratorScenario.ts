@@ -256,8 +256,19 @@ export function runOrchestratorV2Scenario(
   scenario: OrchestratorV2Scenario,
   options: {
     readonly replayGate?: ProviderReplayGate;
-    /** Runs after the steps, while the provider session is still open. */
-    readonly afterSteps?: Effect.Effect<void>;
+    /**
+     * Runs after the steps, while the provider session is still open.
+     *
+     * It is run inside the orchestrator's own scope (the `OrchestratorV2`
+     * service is in context here), so a callback may ask for it: the narrower
+     * `Effect.Effect<void>` this used to be rejected the first test that needed
+     * to read a projection between steps.
+     */
+    readonly afterSteps?: Effect.Effect<
+      void,
+      Orchestrator.OrchestratorV2Error,
+      Orchestrator.OrchestratorV2
+    >;
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,

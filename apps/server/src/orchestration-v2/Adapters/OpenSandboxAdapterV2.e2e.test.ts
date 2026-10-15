@@ -32,12 +32,14 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import {
   OPENSANDBOX_DRIVER,
   OpenSandboxControlPlane,
   OpenSandboxDriver,
 } from "@t3tools/provider-opensandbox/server";
+import { latestRootProviderFailure } from "@t3tools/shared/orchestrationV2ThreadError";
 import { assert, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -131,9 +133,16 @@ it.live(
               },
             }),
             NodeServices.layer,
-            TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+            // The adapter registry resolves an instance's adapter through the
+            // catalog, and since upstream it also carries the MCP provider
+            // sessions a thread can be given.
+            McpProviderSessions.layer,
           ),
         ),
+        // The instance registry resolves drivers through the provider host, so
+        // it is provided here rather than merged as a sibling: a merged layer
+        // does not feed its neighbours.
+        Layer.provide(TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer))),
       );
 
       const threadId = ThreadId.make("thread:opensandbox-e2e");
@@ -238,9 +247,9 @@ it.live(
               client.findTaskByThread(String(threadId)).catch(() => null),
             );
             // eslint-disable-next-line no-console -- a stalled end-to-end run has to say where
-            console.log(
+            yield* Effect.logInfo(
               `[opensandbox-e2e] ${attempt} task=${task?.taskId ?? "none"} state=${task?.state ?? "-"} ` +
-                `runs=${JSON.stringify(projection.runs.map((run) => ({ s: run.status, f: run.failure ?? null })))} ` +
+                `runs=${JSON.stringify(projection.runs.map((run) => ({ s: run.status })))} ` +
                 `sessions=${JSON.stringify(projection.providerSessions.map((session) => ({ d: session.driver, s: session.status })))} ` +
                 `turns=${projection.providerTurns.length} messages=${projection.messages.length} ` +
                 `requests=${JSON.stringify(projection.runtimeRequests.map((request) => request.status))} ` +
@@ -346,12 +355,12 @@ it.live(
         1,
         "the second turn reused the thread the first one bound",
       );
-      const failedRuns = projection.runs.filter((run) => (run.failure ?? null) !== null);
-      assert.deepEqual(
-        failedRuns.map((run) => run.failure),
-        [],
-        "neither turn failed",
-      );
+      // A run no longer carries its own failure: the failure lives on the turn
+      // item, and `latestRootProviderFailure` is what T3 itself reads.
+      const failures = projection.runs
+        .map((run) => latestRootProviderFailure(run, [...projection.turnItems.values()]))
+        .filter((failure) => failure !== null);
+      assert.deepEqual(failures, [], "neither turn failed");
 
       // The turn dispatched into a *suspended* task: it only exists if the
       // adapter resumed the task and waited for its worker before starting it.
