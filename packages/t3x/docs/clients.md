@@ -17,9 +17,21 @@ sudo -u t3app node apps/server/dist/bin.mjs pair \
   --base-dir /var/lib/t3app/.t3 --ttl 24h --label phone
 ```
 
-It prints a link shaped like `https://t3.n0xeid.xyz/pair#token=…`. The token
-lives in the URL _fragment_, so it is never sent to nginx in a request line. Mint
-one per device; `--ttl` is how long the link stays valid.
+It prints a QR code, a token, and a pairing URL **whose origin is the server's
+own** — on this deployment that is `http://127.0.0.1:8090/pair#token=…`, because
+the app listens on loopback behind nginx. Replace the origin with the public one
+and hand that to the device:
+
+```
+https://t3.n0xeid.xyz/pair#token=<the token it printed>
+```
+
+The token lives in the URL _fragment_, so nginx never sees it in a request line.
+It is **single use**: opening the link consumes it and mints that browser a
+session the app lists by label, IP, user agent and device type. `--ttl` defaults
+to 5 minutes and `--scope` defaults to the full set (orchestration, settings,
+providers, filesystem, terminal, source control, preview), so mint one link per
+device and treat it like a credential.
 
 ## Phone (a minute, no build)
 
@@ -85,5 +97,7 @@ the PWA is the verified one.
   and refuses cookie-carrying requests otherwise. The deployment's
   `/etc/nginx/sites-available/t3app-t3.conf` has it.
 - **The pairing link says expired**: mint a new one; the TTL is per link.
+- **The pairing link says already used**: it is single use, and the first device
+  to open it consumed it. Mint one link per device.
 - **The phone shows the desktop layout**: the PWA is the same app, not a mobile
   build; the native app is the only alternative.
