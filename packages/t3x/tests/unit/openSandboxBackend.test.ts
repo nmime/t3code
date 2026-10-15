@@ -760,3 +760,46 @@ test("renew pushes a sandbox's expiry forward and answers with the new deadline"
   const status = await backend.status(handle.id);
   assert.equal(status.autoStopAt, expiresAt, "the status reports the renewed deadline");
 });
+
+test("create puts profile secrets into the sandbox environment, because that is the only time this API takes them", async () => {
+  const handle = await backend.create(
+    spec({
+      env: { CI: "true" },
+      secrets: [
+        { name: "OPENAI_API_KEY", value: "sk-secret-value", inject: "env" },
+        { name: "OTHER_TOKEN", value: "token-value", inject: "env" },
+      ],
+    }),
+  );
+  assert.match(handle.id, /^sandbox-\d+$/);
+
+  const created = server.requests
+    .filter((request) => request.method === "POST" && request.path === "/v1/sandboxes")
+    .at(-1);
+  assert.ok(created, "the create request was sent");
+  const body = JSON.parse(created!.body) as Record<string, unknown>;
+  // A dropped credential starts an agent that cannot authenticate, and the
+  // failure then looks like a provider error at the first model call.
+  assert.deepEqual(body.env, {
+    CI: "true",
+    OPENAI_API_KEY: "sk-secret-value",
+    OTHER_TOKEN: "token-value",
+  });
+});
+
+test("create refuses a header-injected secret instead of dropping it", async () => {
+  await assert.rejects(
+    () =>
+      backend.create(
+        spec({
+          secrets: [
+            { name: "GATEWAY_KEY", value: "v", inject: "headers", hostAllowlist: ["gw.example"] },
+          ],
+        }),
+      ),
+    (err: unknown) =>
+      err instanceof ExecutionError &&
+      err.code === "sandbox_backend_unsupported" &&
+      JSON.stringify(err.details).includes("GATEWAY_KEY"),
+  );
+});

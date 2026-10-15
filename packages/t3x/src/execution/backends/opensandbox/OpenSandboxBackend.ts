@@ -343,13 +343,33 @@ export class OpenSandboxBackend implements SandboxBackend {
     // alive.
     const timeoutSeconds = this.lifetimeSeconds();
 
+    /**
+     * Credentials this API accepts at creation and only at creation: the
+     * sandbox's own environment. Dropping them silently would start an agent
+     * that cannot authenticate, so a secret this backend cannot deliver is
+     * refused loudly (see `injectSecrets`).
+     */
+    const headerSecrets = spec.secrets.filter((secret) => secret.inject === "headers");
+    if (headerSecrets.length > 0) {
+      throw new ExecutionError(
+        "sandbox_backend_unsupported",
+        "OpenSandbox has no header-injection for sandbox egress in this deployment; " +
+          "declare those credentials as `inject: env` in the profile.",
+        { secrets: headerSecrets.map((secret) => secret.name) },
+      );
+    }
+    const createEnv: Record<string, string> = {
+      ...spec.env,
+      ...Object.fromEntries(spec.secrets.map((secret) => [secret.name, secret.value])),
+    };
+
     const body: Record<string, unknown> = {
       ...(spec.snapshot ? { snapshotId: spec.snapshot } : { image: { uri: this.defaultImage } }),
       entrypoint: this.entrypoint,
       metadata,
       timeout: timeoutSeconds,
       ...(Object.keys(resourceLimits).length > 0 ? { resourceLimits } : {}),
-      ...(Object.keys(spec.env).length > 0 ? { env: spec.env } : {}),
+      ...(Object.keys(createEnv).length > 0 ? { env: createEnv } : {}),
       ...platformSpec(spec.platform),
     };
 
@@ -697,15 +717,16 @@ export class OpenSandboxBackend implements SandboxBackend {
 
   /**
    * Credentials are part of the create request (`env`), so there is nothing to
-   * attach afterwards. The lifecycle server's credential vault is an egress
-   * feature, not an in-sandbox one; refusing beats silently dropping a secret.
+   * attach afterwards — `create` merges them into the sandbox's environment.
+   * The lifecycle server's credential vault is an egress feature, not an
+   * in-sandbox one; refusing beats silently dropping a secret.
    */
   async injectSecrets(_sandboxId: string, secrets: SandboxSecret[]): Promise<void> {
     if (secrets.length === 0) return;
     throw new ExecutionError(
       "sandbox_backend_unsupported",
       "OpenSandbox passes credentials as environment variables at creation; declare them in " +
-        "the profile instead of injecting into a running sandbox.",
+        "the profile's `secrets` instead of injecting into a running sandbox.",
       { secrets: secrets.map((secret) => secret.name) },
     );
   }
