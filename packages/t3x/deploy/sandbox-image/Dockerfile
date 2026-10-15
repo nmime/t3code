@@ -44,6 +44,18 @@ RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
 # back to the copy it ships, and the container itself is the isolation boundary.
 RUN npm install -g @openai/codex@0.162.1
 
+# codex's model calls `apply_patch` through its shell tool, and the helper is the
+# codex binary itself, dispatched on argv[0]. Without it on PATH every patch
+# failed with "apply_patch: command not found" and the agent fell back to
+# writing files with the shell — a whole extra round trip per edit, and a
+# multi-hunk patch has no such fallback. Resolved by search because the vendor
+# path carries the target triple (…/vendor/x86_64-unknown-linux-musl/bin/codex).
+RUN CODEX_BIN="$(find "$(npm root -g)/@openai/codex/node_modules" -type f -path '*/bin/codex' | head -1)" \
+    && test -n "$CODEX_BIN" \
+    && ln -sf "$CODEX_BIN" /usr/local/bin/apply_patch \
+    && printf '*** Begin Patch\n*** Add File: /tmp/.apply-patch-probe\n+ok\n*** End Patch\n' | apply_patch \
+    && rm -f /tmp/.apply-patch-probe
+
 # T3 Code's own defaults; a task's profile may override either.
 ENV CI=1
 ENV NODE_ENV=development
