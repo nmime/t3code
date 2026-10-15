@@ -19,13 +19,18 @@ export async function startTestServer(options: {
   port?: number;
   policy?: unknown;
   attachTimeoutMs?: number;
+  /** Run the effect loop on a timer instead of draining it by hand. */
+  autoStartEffects?: boolean;
+  /** Require `Authorization: Bearer <token>` on the client HTTP API. */
+  apiToken?: string;
 }): Promise<TestServer> {
   const launcher = new ProcessWorkerLauncher();
   const server = (await ControlPlaneServer.start({
     stateDir: options.stateDir,
     port: options.port ?? 0,
     launcher,
-    autoStartEffects: false,
+    autoStartEffects: options.autoStartEffects ?? false,
+    ...(options.apiToken ? { apiToken: options.apiToken } : {}),
     ...(options.policy ? { policy: options.policy } : {}),
     workerAttachTimeoutMs: options.attachTimeoutMs ?? 30_000,
   })) as TestServer;

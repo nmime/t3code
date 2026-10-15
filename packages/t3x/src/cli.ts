@@ -62,6 +62,16 @@ Usage:
   t3x reconcile
   t3x import-config --home DIR --name NAME [--targets codex,claude,opencode]
   t3x doctor [--opensandbox-url URL]
+  t3x mcp [--url URL] [--token TOKEN] [--profile ID] [--startup-seconds N]
+
+MCP bridge (t3x mcp, stdio):
+  Serves the control plane as an MCP server, so an agent that speaks MCP —
+  OpenClaw, Codex, Claude Desktop — can start and drive sandboxed tasks as
+  tools. It is an HTTP client of the same API the Mac and phone clients use.
+  T3X_API_URL    control plane root; defaults to http://127.0.0.1:8087
+  T3X_API_TOKEN  the bearer token the control plane requires
+  T3X_PROFILE    profile t3_task_create / t3_run use when the caller names none
+  --url / --token / --profile / --startup-seconds override the variables.
 
 OpenSandbox (the sandbox provider):
   OPENSANDBOX_API_URL  lifecycle server root; defaults to http://127.0.0.1:8080
@@ -119,6 +129,8 @@ async function main(): Promise<void> {
       return importConfig(rest);
     case "doctor":
       return doctor(rest);
+    case "mcp":
+      return mcp(rest);
     default:
       process.stderr.write(`unknown command ${command}\n\n${USAGE}`);
       process.exit(2);
@@ -715,6 +727,27 @@ async function importConfig(args: string[]): Promise<void> {
       2,
     ),
   );
+}
+
+/**
+ * `t3x mcp` — serve the control plane to an MCP client over stdio.
+ *
+ * A long-running process on purpose: the client spawns it, speaks JSON-RPC on
+ * the pipes, and closes stdin to stop it. Nothing is printed to stdout except
+ * protocol messages.
+ */
+async function mcp(args: string[]): Promise<void> {
+  const flags = parseFlags(args);
+  const startupSeconds = flags["startup-seconds"] ? Number(flags["startup-seconds"]) : undefined;
+  const { runMcpCommand } = await import("./mcp/index.js");
+  await runMcpCommand({
+    ...(flags.url ? { url: flags.url } : {}),
+    ...(flags.token ? { token: flags.token } : {}),
+    ...(flags.profile ? { profile: flags.profile } : {}),
+    ...(startupSeconds !== undefined && Number.isFinite(startupSeconds)
+      ? { startupSeconds: startupSeconds * 1000 }
+      : {}),
+  });
 }
 
 async function doctor(args: string[] = []): Promise<void> {

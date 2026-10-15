@@ -209,6 +209,22 @@ reads and for one-off writes (`profile add`, `secret put`), and mutate a _live_
 deployment through the HTTP API — a CLI command that starts an effect worker
 fights the service ("database is locked").
 
+### From an agent (OpenClaw, or any MCP client)
+
+`t3x mcp` serves this same control plane as an MCP server on stdio, so an agent
+that is not T3 can start and drive tasks as tools:
+
+```bash
+openclaw mcp add t3 --command node \
+  --arg /opt/t3code/packages/t3x/dist/src/cli.js --arg mcp \
+  --env T3X_API_URL=http://127.0.0.1:8087 --env T3X_API_TOKEN="$T3X_API_TOKEN"
+openclaw mcp probe     # connect and list what it exposes
+```
+
+`t3_run` creates a task, sends a prompt and returns the agent's reply; `t3_task_exec`,
+`t3_task_git` and `t3_task_files` read the result. [openclaw.md](./openclaw.md) has
+the whole surface and what it deliberately does not cover.
+
 ## 6. Working on a real repository
 
 - `repositoryUrl` is cloned into the sandbox; the base checkout is shared by the

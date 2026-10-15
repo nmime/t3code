@@ -249,6 +249,9 @@ surfaces — HTTP API and CLI — driven as a Mac/phone client would drive them
   replaces or extends, and in what order to do it.
 - [`docs/operations.md`](docs/operations.md) — VPS deployment, sandbox-server
   setup, credentials, recovery and troubleshooting.
+- [`docs/openclaw.md`](docs/openclaw.md) — the MCP bridge: OpenClaw (or any MCP
+  client) starts and drives tasks, with `t3x mcp`.
+- [`docs/clients.md`](docs/clients.md) — T3 Code on a Mac and on a phone.
 - [`profiles/`](profiles) — example environment profiles.
 - [`deploy/t3x-control-plane.service`](deploy/t3x-control-plane.service) — systemd unit.
 - [`deploy/host-t3-app.sh`](deploy/host-t3-app.sh) — the same host, running the

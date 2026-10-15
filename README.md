@@ -16,6 +16,10 @@ a diff on the thread.
 
 - **[Coding tasks, end to end](packages/t3x/docs/coding.md)** — install, configure
   a model gateway, start a coding thread, operate it, and the traps worth knowing.
+- **[Driving T3 from OpenClaw](packages/t3x/docs/openclaw.md)** — `t3x mcp` as an
+  MCP server, so an agent elsewhere starts and drives tasks as tools.
+- **[A Mac and a phone](packages/t3x/docs/clients.md)** — the two clients, in a
+  minute each.
 - [packages/t3x/README.md](packages/t3x/README.md) — the control plane: tasks,
   profiles, secrets, sandbox lifecycle, the worker.
 - [packages/provider-opensandbox/README.md](packages/provider-opensandbox/README.md)
