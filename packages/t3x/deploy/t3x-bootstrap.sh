@@ -8,11 +8,12 @@
 # never overwritten - the script says so and leaves it alone.
 #
 # Usage
-#   ./t3x-bootstrap.sh                                          # <ip>.sslip.io
+#   DOMAIN=t3x.example.com ./t3x-bootstrap.sh
 #   DOMAIN=t3x.example.com SANDBOX_DOMAIN=sandbox.example.com ./t3x-bootstrap.sh
 #
-# Variables (all optional)
-#   DOMAIN               public name for the control plane (default: <ip>.sslip.io)
+# Variables (DOMAIN is required; the rest optional)
+#   DOMAIN               public name for the control plane: the name T3 dials and
+#                        the one the certificate is issued for (required)
 #   SANDBOX_DOMAIN       public name for the sandbox API (default: sandbox.$DOMAIN)
 #   OPENSANDBOX_API_KEY  key the sandbox server requires (default: generated)
 #   OPENSANDBOX_API_URL  skip the local install and use this server instead
@@ -54,8 +55,19 @@ die()  { printf '\033[1;31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 # The nginx vhost that already answers a name, if any. Rewriting a name that is
 # already served would leave two server blocks for it and the first would win.
-vhost_for() { grep -rls "server_name" /etc/nginx/sites-enabled/ 2>/dev/null |
-  xargs -r grep -lsE "server_name[^;]*[[:space:]]$1([[:space:];]|$)" 2>/dev/null | head -1; }
+# The directory's entries are read one by one on purpose: a vhost in
+# sites-enabled is normally a symlink, and `grep -r` does not follow a symlink it
+# meets while recursing, so a served name looked unserved.
+# Prints the path, or nothing; always returns 0, because callers assign its
+# output and `set -e` would abort on a non-zero substitution.
+vhost_for() {
+  local f
+  for f in /etc/nginx/sites-enabled/*; do
+    [ -f "$f" ] || continue
+    grep -qsE "server_name[^;]*[[:space:]]$1([[:space:];]|$)" "$f" && { printf '%s\n' "$f"; return 0; }
+  done
+  return 0
+}
 # `--state-dir` has to come after the subcommand: the CLI reads its first
 # argument as the command name, and a command without it writes to /root/.t3x
 # where the service (which uses $STATE_DIR) never looks.
@@ -69,7 +81,13 @@ log "host: ${PRETTY_NAME:-unknown} $(uname -m) | $(nproc) vcpu | $(awk '/MemTota
 
 PUBLIC_IP="${PUBLIC_IP:-$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)}"
 [ -n "$PUBLIC_IP" ] || die "could not determine the public IP; pass PUBLIC_IP=..."
-DOMAIN="${DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
+# No default on purpose. The certificate is issued for this name from its own
+# DNS, so a silent fallback would produce a host nobody can reach and a renewal
+# that fails months later. A name that resolves to the IP by itself is an
+# explicit choice, not a default: DOMAIN=${PUBLIC_IP//./-}.sslip.io
+if [ -z "${DOMAIN:-}" ]; then
+  die "DOMAIN is required: the public name the control plane is served on, e.g. DOMAIN=t3x.example.com. Point a DNS record at $PUBLIC_IP first; without DNS of your own, DOMAIN=${PUBLIC_IP//./-}.sslip.io resolves to this IP by itself."
+fi
 SANDBOX_DOMAIN="${SANDBOX_DOMAIN:-sandbox.$DOMAIN}"
 WORKER_URL="${WORKER_URL:-https://$DOMAIN}"
 log "public ip $PUBLIC_IP | control plane url $WORKER_URL | sandbox api https://$SANDBOX_DOMAIN"

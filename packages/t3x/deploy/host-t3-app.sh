@@ -10,8 +10,9 @@
 #   DOMAIN=t3.example.com ./host-t3-app.sh
 #   DOMAIN=t3.example.com T3X_API_TOKEN=... ./host-t3-app.sh
 #
-# Variables (all optional)
-#   DOMAIN         public name for the app (default: <ip>.sslip.io)
+# Variables (DOMAIN is required; the rest optional)
+#   DOMAIN         public name for the app: the name the certificate is issued
+#                  for (required; no default, same rule as t3x-bootstrap.sh)
 #   PORT           port the app listens on, loopback (default: 8090)
 #   APP_DIR        the checkout (default: /opt/t3code)
 #   BASE_DIR       the app's base dir (default: /var/lib/t3app/.t3)
@@ -43,10 +44,31 @@ PROFILE_ID="${PROFILE_ID:-default}"
 AGENT="${AGENT:-echo}"
 NODE_BIN="${NODE_BIN:-/usr/local/bin/node}"
 
-log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m[!] %s\033[0m\n' "$*" >&2; }
+die()  { printf '\033[1;31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
+# The vhost that serves $1 *and* proxies to the app. Matching on the name alone is
+# not enough: another server block may answer that name (the control plane on the
+# same host, say), and the name-only check then skipped writing the app's vhost and
+# still reported success while nothing served the app.
+# Prints the path, or nothing; always returns 0, because the caller assigns its
+# output and `set -e` would abort on a non-zero substitution.
+vhost_for_app() {
+  local f
+  for f in /etc/nginx/sites-enabled/*; do
+    [ -f "$f" ] || continue
+    grep -qsE "server_name[^;]*[[:space:]]$1([[:space:];]|$)" "$f" || continue
+    grep -qsE "proxy_pass[[:space:]]+http://(127\.0\.0\.1|localhost):$PORT" "$f" && { printf '%s\n' "$f"; return 0; }
+  done
+  return 0
+}
 
 PUBLIC_IP="${PUBLIC_IP:-$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)}"
-DOMAIN="${DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
+# No default: the certificate is issued for this name from its own DNS, so it has
+# to be a name that really points here (see the note in t3x-bootstrap.sh).
+if [ -z "${DOMAIN:-}" ]; then
+  die "DOMAIN is required: the public name the app is served on, e.g. DOMAIN=t3.example.com. Point a DNS record at ${PUBLIC_IP:-this host} first; without DNS of your own, DOMAIN=${PUBLIC_IP//./-}.sslip.io resolves to this IP by itself."
+fi
 T3X_URL="${T3X_URL:-https://t3code.${DOMAIN#*.}}"
 T3X_TOKEN="${T3X_API_TOKEN:-$(sed -n 's/^T3X_API_TOKEN=//p' /etc/t3x/env 2>/dev/null || true)}"
 log "app https://$DOMAIN -> 127.0.0.1:$PORT | control plane $T3X_URL"
@@ -108,8 +130,11 @@ systemctl daemon-reload
 systemctl enable -q t3app
 
 log "nginx vhost $DOMAIN -> 127.0.0.1:$PORT"
-if grep -rqs "server_name[^;]*[[:space:]]$DOMAIN" /etc/nginx/sites-enabled/; then
-  log "a vhost already serves $DOMAIN; leaving it alone"
+APP_VHOST="$(vhost_for_app "$DOMAIN")"
+if [ -n "$APP_VHOST" ]; then
+  log "a vhost already serves $DOMAIN -> 127.0.0.1:$PORT ($APP_VHOST); leaving it alone"
+elif grep -rqs "server_name[^;]*[[:space:]]$DOMAIN" /etc/nginx/sites-enabled/; then
+  die "$DOMAIN is answered by a server block that does not proxy to 127.0.0.1:$PORT ($(grep -rlsE "server_name[^;]*[[:space:]]$DOMAIN([[:space:];]|$)" /etc/nginx/sites-enabled/ | tr '\n' ' ')) - writing the app's vhost would leave two server blocks for one name. Point $DOMAIN at the app, or pass another DOMAIN."
 else
   cat > /etc/nginx/sites-available/t3app.conf <<EOF
 # T3 Code web app ($DOMAIN) -> 127.0.0.1:$PORT.

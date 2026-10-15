@@ -60,6 +60,10 @@ ssh root@your-vps
 DOMAIN=t3x.example.com SANDBOX_DOMAIN=sandbox.example.com bash /root/t3x-bootstrap.sh
 ```
 
+`DOMAIN` is the one variable with no default, in this script and in
+[`host-t3-app.sh`](../deploy/host-t3-app.sh): it is the name T3 dials and the name
+the certificate is issued for, so it has to be one that really points at the host.
+
 The rest of this section is what it does, by hand.
 
 ```bash
@@ -336,8 +340,9 @@ nginx -t && systemctl reload nginx
 certbot --nginx -d t3x.example.com --redirect --keep-until-expiring
 ```
 
-No domain of your own pointing here yet? `<ip-with-dashes>.sslip.io` resolves
-to the address and certbot can issue for it.
+No domain of your own pointing here yet? `<ip-with-dashes>.sslip.io` resolves to
+the address by itself and certbot can issue for it — as an explicit choice, not a
+default: `DOMAIN=203-0-113-7.sslip.io bash /root/t3x-bootstrap.sh`.
 
 ## 6. Point T3 at the control plane
 
