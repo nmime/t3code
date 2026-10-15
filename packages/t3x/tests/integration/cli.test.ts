@@ -38,7 +38,7 @@ test("CLI: profile, task, message, git and reconcile", async () => {
   fs.writeFileSync(
     profileFile,
     [
-      "apiVersion: t3-daytona/v1",
+      "apiVersion: t3x/v1",
       "kind: EnvironmentProfile",
       "metadata:",
       "  name: cli-profile",
@@ -598,6 +598,44 @@ test("CLI: sandbox destroy refuses while a task is bound, and destroys when it i
     assert.match(stdout, /"action": "destroy"/);
     assert.equal(server.projects.getSandbox(sandboxId)?.state, "deleted");
     assert.ok(!fs.existsSync(sandboxDir), "the backend really removed it");
+  } finally {
+    await server.stop();
+  }
+});
+
+test("CLI: a secret is stored by name, and the value never comes back out", async () => {
+  const stateDir = tempStateDir();
+  const value = "sk-not-a-real-key-0123456789";
+
+  const put = (await run("node", [
+    cli,
+    "secret",
+    "put",
+    "MODEL_GATEWAY_API_KEY",
+    "--value",
+    value,
+    "--profiles",
+    "default,other",
+    "--state-dir",
+    stateDir,
+  ])) as { stdout: string };
+
+  // The CLI answers with the name and the policy — a secret echoed into a
+  // terminal ends up in a shell history and in a systemd journal.
+  assert.match(put.stdout, /MODEL_GATEWAY_API_KEY/);
+  assert.ok(!put.stdout.includes(value), "the value is not echoed");
+
+  const listed = (await t3x(["secret", "list", "--state-dir", stateDir])) as {
+    secrets: string[];
+  };
+  assert.deepEqual(listed.secrets, ["MODEL_GATEWAY_API_KEY"]);
+
+  // Stored where a profile can reference it, and only for the profiles named.
+  const server = await startTestServer({ stateDir });
+  try {
+    assert.equal(server.secrets.has("MODEL_GATEWAY_API_KEY"), true);
+    assert.equal(server.secrets.get("MODEL_GATEWAY_API_KEY", "default"), value);
+    assert.throws(() => server.secrets.get("MODEL_GATEWAY_API_KEY", "unlisted"));
   } finally {
     await server.stop();
   }

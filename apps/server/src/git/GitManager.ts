@@ -1352,6 +1352,18 @@ export const make = Effect.gen(function* () {
               ),
             )
           : Effect.succeed(null);
+        // A project with no source-control provider is a configuration state,
+        // not a failure. This runs on a timer, and on a deployment that never
+        // configured one it answered nothing but noise every half minute
+        // ("No unknown source control provider is registered."). Only a
+        // provider that exists and failed is worth a warning.
+        if (
+          isSourceControlProviderError(error) &&
+          (error.provider === "unknown" ||
+            /no .*source control provider is registered/i.test(error.detail))
+        ) {
+          return fallback;
+        }
         return Effect.logWarning("PR lookup failed.").pipe(
           Effect.annotateLogs({
             operation: "lookupStatusPr",

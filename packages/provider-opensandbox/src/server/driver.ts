@@ -49,7 +49,7 @@ import {
 } from "@t3tools/provider-core/server/textGenerationOperations";
 
 import { OpenSandboxSettings } from "../settings.ts";
-import { makeAdapter } from "./adapter.ts";
+import { makeAdapter, threadForWorkspace } from "./adapter.ts";
 import {
   defaultConfig,
   normalizeControlPlaneUrl,
@@ -89,13 +89,24 @@ export const OpenSandboxAdapterV2Driver: ProviderAdapterDriver<OpenSandboxProvid
  * than answered blind: a one-shot invocation has no read-only tool mode to
  * promise, and `withoutInvestigation` says exactly that.
  */
-const makeSandboxTextGeneration = (client: OpenSandboxControlPlane): ProviderTextGeneration => {
+/**
+ * Exported for the test that pins the thread into a generation request; the
+ * driver itself is the only production caller.
+ */
+export const makeSandboxTextGeneration = (
+  client: OpenSandboxControlPlane,
+): ProviderTextGeneration => {
   const run: Runner = (request) =>
     Effect.gen(function* () {
+      // Name the thread when the app's checkout is one a session has claimed:
+      // the control plane resolves the task by thread, because the path in the
+      // request is the host copy of the project, which no task owns.
+      const threadId = threadForWorkspace(request.cwd);
       const text = yield* Effect.tryPromise({
         try: () =>
           client.generateText({
             cwd: request.cwd,
+            ...(threadId ? { threadId } : {}),
             prompt: request.prompt,
             ...(request.modelSelection.model ? { model: request.modelSelection.model } : {}),
           }),

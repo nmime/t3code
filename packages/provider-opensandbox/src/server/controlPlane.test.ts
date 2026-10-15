@@ -23,7 +23,7 @@ let server: Awaited<ReturnType<typeof ControlPlaneServer.start>>;
 let client: OpenSandboxControlPlane;
 
 const profile = {
-  apiVersion: "t3-daytona/v1",
+  apiVersion: "t3x/v1",
   kind: "EnvironmentProfile",
   metadata: { name: "provider-test", version: 1 },
   runtime: { snapshot: "node24-dev-v3", resources: { cpu: 2, memoryGiB: 4 } },
@@ -420,6 +420,32 @@ test("text generation answers a prompt in the sandbox without touching the conve
   // A workspace no task owns is refused rather than guessed at.
   await assert.rejects(
     () => client.generateText({ cwd: "/workspace/nowhere", prompt: "hello" }),
+    (error: Error) => {
+      assert.ok(error instanceof OpenSandboxControlPlaneError);
+      assert.equal(error.code, "task_not_found");
+      return true;
+    },
+  );
+
+  // The app names its own thread, and the path it also sends is the *host*
+  // checkout it has open — no task lives there, which is why a generation
+  // resolved by path alone failed for every thread and no thread ever got a
+  // generated title. The thread is what makes it land.
+  const byThread = await client.generateText({
+    cwd: "/srv/host-workspace",
+    threadId: task.threadId,
+    prompt: "Title this thread.",
+  });
+  assert.match(byThread, /echo title/, "the thread routed the prompt to its task");
+
+  // A thread with no task, named with a path no task owns, is still refused.
+  await assert.rejects(
+    () =>
+      client.generateText({
+        cwd: "/srv/host-workspace",
+        threadId: "thread_without_a_task",
+        prompt: "hello",
+      }),
     (error: Error) => {
       assert.ok(error instanceof OpenSandboxControlPlaneError);
       assert.equal(error.code, "task_not_found");

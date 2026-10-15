@@ -16,13 +16,15 @@ It lives in this repository as a workspace package. T3 reaches it through
 proxies a thread's agent into a sandbox; this package owns the sandbox side —
 tasks, environment profiles, sandbox lifecycle, the execution worker and the
 client HTTP API. It runs on its own (a VPS, a laptop) and has no dependency on
-T3's source tree. The package was `@t3tools/daytona` while the sandboxes came
-from Daytona; the backend pivot renamed it, and
-[`@t3tools/provider-opensandbox`](../provider-opensandbox) lists every name that
-moved.
+T3's source tree.
 
 This repository implements the architecture described in the technical report
 _"T3 Code + VPS + task sandboxes"_, section by section.
+
+**[docs/coding.md](./docs/coding.md) is the operator's guide**: install, model
+gateway, profile, agents (codex, OpenClaw, claude, opencode), starting a coding
+task from the app / the API / the CLI, deploying both halves, and a
+troubleshooting table of the failures that actually happened.
 
 Run it: `pnpm --filter @t3tools/t3x build && node packages/t3x/dist/src/cli.js serve`.
 

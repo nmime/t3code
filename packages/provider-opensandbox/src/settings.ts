@@ -102,7 +102,7 @@ export const OpenSandboxSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Agent",
         description:
-          "What the sandbox runs: codex, claude, opencode, pi or echo. Empty leaves the choice to the environment profile.",
+          "What the sandbox runs: codex, openclaw, claude, opencode, pi or echo. Empty leaves the choice to the environment profile.",
         providerSettingsForm: { placeholder: "codex", clearWhenEmpty: "omit" },
       }),
     ),

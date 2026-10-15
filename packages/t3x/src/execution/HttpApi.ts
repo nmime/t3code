@@ -302,22 +302,25 @@ export class HttpApi {
         }
       }
 
-      // Text generation: one prompt, no conversation. Keyed by the sandbox
-      // workspace the caller is asking about, so it lands in the task that
-      // owns those files.
+      // Text generation: one prompt, no conversation. Resolved by the app
+      // thread when the caller names one — the path it also sends is the app's
+      // own checkout, which no task owns — and by the sandbox workspace
+      // otherwise.
       if (path === "/text-generation" && method === "POST") {
         const cwd = String(body.cwd ?? "").trim();
+        const threadId = String(body.threadId ?? "").trim();
         const prompt = String(body.prompt ?? "");
-        if (!cwd || !prompt) {
+        if ((!cwd && !threadId) || !prompt) {
           throw new ExecutionError(
             "protocol_violation",
-            "POST /text-generation needs `cwd` and `prompt`",
+            "POST /text-generation needs `prompt` and either `threadId` or `cwd`",
             {},
           );
         }
         return send(res, 200, {
           ...(await this.deps.tasks.generateText({
-            cwd,
+            ...(cwd ? { cwd } : {}),
+            ...(threadId ? { threadId } : {}),
             prompt,
             ...(body.model ? { model: String(body.model) } : {}),
           })),

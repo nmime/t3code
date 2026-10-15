@@ -33,18 +33,15 @@ files, and reach a port through the server's own proxy.
   _out_, so this needs an address reachable from inside a sandbox — a VPS with a
   public name, or anything on the same network.
 
-> **Why not Daytona.** The integration was first built against Daytona, and the
-> managed product cannot host this architecture: Daytona applies network limits
-> by billing tier (its docs, "Network Limits (Firewall)"), and on Tier 1 & 2
-> a sandbox's outbound access is restricted to "essential services" **and cannot
-> be overridden at the sandbox level** — the organization's policy beats any
-> `networkAllowList` passed when creating a sandbox. Measured from a real
-> sandbox: DNS resolves the control-plane host, TCP 443 connects, and the TLS
-> handshake is then reset by peer, so it looks like a broken server rather than a
-> policy; the run ends with `task.worker_attach_failed`. Tier 3 needs a $500
-> top-up. A **self-hosted** provider has no such policy, and OpenSandbox is the
-> one that runs on a single Docker host — which is also why the sandbox server
-> usually lives on the same machine as the control plane.
+> **Why self-hosted.** The sandbox provider is a lifecycle server the deployment
+> runs itself (OpenSandbox, on a single Docker host), not a managed product.
+> A managed provider can apply network limits by billing tier and refuse to let
+> a sandbox override them, and this architecture needs a sandbox that can dial
+> the control plane: with the policy in the way, DNS resolves the control-plane
+> host, TCP 443 connects, and the TLS handshake is then reset by peer — it looks
+> like a broken server rather than a policy, and the run ends with
+> `task.worker_attach_failed`. Self-hosted has no such policy, which is also why
+> the sandbox server usually lives on the same machine as the control plane.
 
 ---
 
@@ -370,13 +367,11 @@ in the server settings' `providerInstances` map:
 ```
 
 The driver id is `opensandbox` — the provider's identity in T3's registry and in
-stored settings. It was `daytona` before the backend moved off Daytona; an
-instance stored under the old id is renamed on load (`PROVIDER_DRIVER_RENAMES`
-in `apps/server/src/serverSettings.ts`), so a settings file written before the
-rename keeps working and nothing has to be edited by hand. What is _not_
-rewritten is history: a persisted thread or session binding that names the old
-driver reads as an unavailable provider, and its next turn needs a thread bound
-to a configured instance. The instance's status line is the control plane's
+stored settings. Nothing else writes or reads it: a settings file whose
+`providerInstances` entry names a different driver reads as an unavailable
+provider, and the fix is to set the driver on that entry to `opensandbox` (the
+instance id is the user's own routing key and does not change). The instance's
+status line is the control plane's
 health as the driver probed it, and it says **which** failure it was:
 unreachable, token refused, or no such environment profile.
 `hasDefaultInstance` is `false`, so nothing is created until you add one.

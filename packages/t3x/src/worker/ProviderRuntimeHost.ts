@@ -90,6 +90,24 @@ export class ProviderRuntimeHost {
         command: 'codex exec --skip-git-repo-check "$PROMPT"',
         configEnv: { CODEX_HOME: `${options.configHome}/.codex` },
       },
+      openclaw: {
+        driver: "openclaw",
+        // `agent exec` is OpenClaw's one isolated headless turn: no Gateway, no
+        // session, no channels — the same shape as `codex exec`. It prints the
+        // agent's answer on stdout and its diagnostics on stderr, which is what
+        // the thread wants: the answer as the reply, the noise as worker logs.
+        // `--config` (rather than the ambient config) pins the run to the file
+        // the profile writes; `--auth-env-only` cannot be combined with it, so
+        // the file names the credential through an env reference instead of
+        // carrying it (see the profile's setup step).
+        command:
+          'openclaw agent exec --config "$CWD/.openclaw/openclaw.json5" --model omniroute/auto/best-coding "$PROMPT"',
+        configEnv: {
+          // State stays inside the task's workspace: one sandbox per task, so
+          // there is nothing to share and nothing to leak between them.
+          OPENCLAW_STATE_DIR: `${options.configHome}/.openclaw-state`,
+        },
+      },
       claude: {
         driver: "claude",
         command: 'claude -p "$PROMPT"',

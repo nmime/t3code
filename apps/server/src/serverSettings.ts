@@ -127,53 +127,11 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
   };
 };
 
-/**
- * Driver kinds this build renamed, old id → current id.
- *
- * A driver kind is persisted: `ServerSettings.providerInstances` stores it, so
- * renaming one would strand every configured instance as an unavailable
- * shadow. The provider behind `daytona` is the OpenSandbox one — same control
- * plane, same config schema, renamed when the backend moved off Daytona — so
- * the stored id is carried across. Runs on every load and update, like the
- * enabled-flag fold: the file converges on the next write.
- *
- * Only the *driver* is renamed. Instance ids are user-chosen routing keys, and
- * a thread, session or binding that names one keeps working untouched.
- */
-const PROVIDER_DRIVER_RENAMES: ReadonlyMap<ProviderDriverKind, ProviderDriverKind> = new Map([
-  [ProviderDriverKind.make("daytona"), ProviderDriverKind.make("opensandbox")],
-]);
-
-const renameProviderDriverKinds = (settings: ServerSettings): ServerSettings => {
-  let changed = false;
-  const providerInstances: Record<string, ProviderInstanceConfig> = {};
-  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-    const renamed = PROVIDER_DRIVER_RENAMES.get(instance.driver);
-    if (renamed === undefined) {
-      providerInstances[instanceId] = instance;
-      continue;
-    }
-    changed = true;
-    providerInstances[instanceId] = {
-      ...instance,
-      driver: renamed,
-    } satisfies ProviderInstanceConfig;
-  }
-  if (!changed) {
-    return settings;
-  }
-  return {
-    ...settings,
-    providerInstances: providerInstances as ServerSettings["providerInstances"],
-  };
-};
-
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
-    Effect.map(renameProviderDriverKinds),
     Effect.map(foldProviderInstanceEnabledFlags),
     Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
     Effect.mapError(
@@ -843,12 +801,10 @@ const make = Effect.gen(function* () {
             ),
           );
 
-    const loaded = renameProviderDriverKinds(
-      foldProviderInstanceEnabledFlags(
-        legacyProviders === undefined
-          ? settings
-          : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
-      ),
+    const loaded = foldProviderInstanceEnabledFlags(
+      legacyProviders === undefined
+        ? settings
+        : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
     );
     const folded = settingsFileTrusted
       ? foldLegacyProjectSettings(loaded, legacyProjectRows)

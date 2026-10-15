@@ -42,14 +42,6 @@ test("rejects an invalid profile with actionable issues", () => {
   );
 });
 
-test("still parses profiles written under the old api version", () => {
-  // The profile contract was named after OpenSandbox before the deployment moved
-  // to a self-hosted sandbox provider; stored profiles must keep working.
-  const profile = parseProfile({ ...base, apiVersion: "t3-daytona/v1" });
-  assert.equal(profile.metadata.name, "typescript-backend");
-  assert.equal(profile.apiVersion, "t3-daytona/v1");
-});
-
 test("parses YAML profiles", () => {
   const yaml = `
 apiVersion: t3x/v1

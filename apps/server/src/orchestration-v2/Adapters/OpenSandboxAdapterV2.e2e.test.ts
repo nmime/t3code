@@ -54,7 +54,7 @@ import { ProcessWorkerLauncher } from "../../../../../packages/t3x/dist/src/exec
 const instanceId = ProviderInstanceId.make("opensandbox_e2e");
 
 const profile = {
-  apiVersion: "t3-daytona/v1",
+  apiVersion: "t3x/v1",
   kind: "EnvironmentProfile",
   metadata: { name: "provider-test", version: 1 },
   runtime: { snapshot: "node24-dev-v3", resources: { cpu: 2, memoryGiB: 4 } },

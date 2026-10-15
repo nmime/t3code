@@ -130,11 +130,10 @@ backend the control plane uses.
 Egress is the one environmental limit worth knowing before blaming the code, and
 it is why this deployment self-hosts: a sandbox has to be able to dial the
 control plane. With the sandbox server on the same host that is an ordinary
-outbound HTTPS request, and nothing filters it. A hosted provider with a
-tier-based firewall (Daytona's Tier 1/2, which restricts a sandbox's outbound
-traffic to package registries and the provider's own API and cannot be
-overridden at the sandbox level) produces `task.worker_attach_failed` after the
-worker starts, with the socket reset — a policy, not a bug in this code.
+outbound HTTPS request, and nothing filters it. A provider that limits a
+sandbox's outbound traffic by policy — or a firewall between the two hosts —
+produces `task.worker_attach_failed` after the worker starts, with the socket
+reset: a policy, not a bug in this code.
 
 ## Credentials
 

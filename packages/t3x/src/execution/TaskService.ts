@@ -123,11 +123,12 @@ export class TaskService {
    * not a turn, and must not appear as one in the thread that asked for it.
    */
   async generateText(input: {
-    cwd: string;
+    cwd?: string;
+    threadId?: string;
     prompt: string;
     model?: string;
   }): Promise<{ text: string }> {
-    const task = this.taskForCwd(input.cwd);
+    const task = this.taskForGeneration(input);
     await this.controlPlane.ensureReady(task.taskId);
     const reply = await this.registry.sendCommand(
       task.taskId,
@@ -151,6 +152,37 @@ export class TaskService {
       );
     }
     return { text };
+  }
+
+  /**
+   * The task a generation prompt belongs to.
+   *
+   * A caller that knows the app thread names it, and that is the reliable key:
+   * T3's text generation passes the path the app has open, which for a sandbox
+   * provider is the *host* copy of the project — no task owns it, because a
+   * task's paths are inside its sandbox. Resolving by path alone answered
+   * "no sandbox workspace is /srv/t3-workspace" for every thread, so a thread's
+   * title was never generated. The path stays as the fallback for a caller that
+   * only has one.
+   */
+  private taskForGeneration(input: { cwd?: string; threadId?: string }): TaskRecord {
+    const threadId = input.threadId?.trim();
+    if (threadId) {
+      const task = this.store
+        .listTasks()
+        .filter((candidate) => candidate.threadId === threadId)
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+      if (task) return task;
+    }
+    const cwd = (input.cwd ?? "").trim();
+    if (!cwd) {
+      throw new ExecutionError(
+        "task_not_found",
+        "a generation names neither a thread with a task nor a sandbox workspace",
+        { threadId: threadId ?? null },
+      );
+    }
+    return this.taskForCwd(cwd);
   }
 
   /**

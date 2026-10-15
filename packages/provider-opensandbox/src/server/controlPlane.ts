@@ -218,8 +218,17 @@ export class OpenSandboxControlPlane {
    * Answer one prompt in the sandbox that owns `cwd`, with no conversation
    * attached: the sandbox side of T3's text generation. The reply is raw text;
    * the caller decodes it against the operation's own schema.
+   *
+   * `threadId` names the app thread when the caller knows it, and is what the
+   * control plane resolves the task by: a caller's `cwd` may be the host
+   * checkout the app has open, which no task owns.
    */
-  async generateText(input: { cwd: string; prompt: string; model?: string }): Promise<string> {
+  async generateText(input: {
+    cwd: string;
+    threadId?: string;
+    prompt: string;
+    model?: string;
+  }): Promise<string> {
     const { text } = await this.request<{ text: string }>("POST", "/text-generation", input, {
       timeoutMs: 15 * 60_000,
     });

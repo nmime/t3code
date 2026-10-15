@@ -44,6 +44,13 @@ RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
 # back to the copy it ships, and the container itself is the isolation boundary.
 RUN npm install -g @openai/codex@0.162.1
 
+# The second agent runtime the worker drives: `openclaw agent exec` is its
+# one-shot headless turn (see worker/ProviderRuntimeHost.ts). Pinned for the
+# same reason codex is — the flags and the wire format move between releases.
+# `--allow-scripts=openclaw` is required: the package's own lifecycle script is
+# what fetches its native pieces.
+RUN npm install -g openclaw@2026.10.3 --allow-scripts=openclaw
+
 # codex's model calls `apply_patch` through its shell tool, and the helper is the
 # codex binary itself, dispatched on argv[0]. Without it on PATH every patch
 # failed with "apply_patch: command not found" and the agent fell back to

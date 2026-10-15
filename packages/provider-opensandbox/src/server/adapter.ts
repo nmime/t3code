@@ -63,6 +63,33 @@ export interface OpenSandboxAdapterOptions {
   client?: OpenSandboxControlPlane;
 }
 
+/**
+ * Which app thread works in which *host* checkout.
+ *
+ * T3's text generation names the path the app has open — for a project that is
+ * the host checkout (`/srv/t3-workspace`), while everything a task owns lives
+ * inside its sandbox (`/workspace/project`). Nothing at the host path exists on
+ * the control plane, so a generation prompt resolved by path alone failed for
+ * every thread ("no sandbox workspace is /srv/t3-workspace"), and a thread's
+ * title was never generated. The mapping is learned where both ids are known —
+ * a session open — and read when a generation prompt arrives.
+ *
+ * Module state, because the two halves are constructed separately: the adapter
+ * by T3's adapter-driver registry, the text generation by the provider driver.
+ */
+const threadByHostWorkspace = new Map<string, string>();
+
+const normalizeWorkspace = (cwd: string): string => cwd.replace(/\/+$/, "");
+
+/** Remember which app thread a host checkout belongs to. */
+export const rememberThreadWorkspace = (cwd: string, threadId: string): void => {
+  if (cwd.trim() && threadId.trim()) threadByHostWorkspace.set(normalizeWorkspace(cwd), threadId);
+};
+
+/** The app thread a host checkout belongs to, when a session has said so. */
+export const threadForWorkspace = (cwd: string): string | undefined =>
+  threadByHostWorkspace.get(normalizeWorkspace(cwd));
+
 export const makeAdapter = (
   options: OpenSandboxAdapterOptions,
 ): ProviderAdapter.ProviderAdapterV2["Service"] => {
@@ -146,6 +173,11 @@ export const makeAdapter = (
       >();
       const appThreadId = input.threadId as unknown as string;
       const cwd = input.runtimePolicy.cwd ?? "/workspace/project";
+      // The only place both ids are known: T3's thread, and the checkout it has
+      // open on the host. Text generation (a thread title, a commit message)
+      // arrives later naming that host path, and has to be routed to this
+      // thread's task — see `threadForWorkspace`.
+      rememberThreadWorkspace(cwd, appThreadId);
       const tasks = new Map<string, OpenSandboxTask>();
       /** Control-plane turn id per control-plane run id, learned from events. */
       const turnsByRun = new Map<string, string>();

@@ -1042,41 +1042,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
-  it.effect("carries a renamed driver kind across the stored settings", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        JSON.stringify({
-          providerInstances: {
-            sandbox: {
-              driver: "daytona",
-              enabled: true,
-              config: { controlPlaneUrl: "https://t3code.example.com" },
-            },
-            untouched: { driver: "codex", config: {} },
-          },
-        }),
-      );
-
-      const settings = yield* serverSettings.getSettings;
-
-      // The instance id is the user's own routing key and survives untouched;
-      // only the driver id moves to the name this build registers.
-      assert.deepEqual(settings.providerInstances[ProviderInstanceId.make("sandbox")], {
-        driver: ProviderDriverKind.make("opensandbox"),
-        enabled: true,
-        config: { controlPlaneUrl: "https://t3code.example.com" },
-      });
-      assert.deepEqual(settings.providerInstances[ProviderInstanceId.make("untouched")], {
-        driver: ProviderDriverKind.make("codex"),
-        config: {},
-      });
-    }).pipe(Effect.provide(layerServerSettings())),
-  );
-
   it.effect("enables previously used optional providers while migrating legacy settings", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

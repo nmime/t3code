@@ -4,6 +4,23 @@ T3 Code is an "agent harness control surface". It enables control of the agents 
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
 
+## Run the agents in sandboxes on your own VPS
+
+This fork adds a remote execution path: a **control plane** (`packages/t3x`) that
+owns tasks, sandboxes, environment profiles and secrets on a server you run, and
+a **provider driver** (`packages/provider-opensandbox`) that turns a thread into
+a task inside a throwaway container. The agents — Codex, OpenClaw, Claude Code,
+OpenCode, pi — run in that container, not on your machine, and the repository is
+cloned there; each thread gets its own git worktree, and its changes come back as
+a diff on the thread.
+
+- **[Coding tasks, end to end](packages/t3x/docs/coding.md)** — install, configure
+  a model gateway, start a coding thread, operate it, and the traps worth knowing.
+- [packages/t3x/README.md](packages/t3x/README.md) — the control plane: tasks,
+  profiles, secrets, sandbox lifecycle, the worker.
+- [packages/provider-opensandbox/README.md](packages/provider-opensandbox/README.md)
+  — the T3 side: the driver, the adapter, the event mapper.
+
 ## "Wait, what are you selling me?"
 
 Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.

@@ -1,0 +1,42 @@
+{
+  "apiVersion": "t3x/v1",
+  "kind": "EnvironmentProfile",
+  "metadata": {
+    "name": "default",
+    "version": 4,
+    "description": "Image-backed sandbox on the OpenSandbox lifecycle server. codex and OpenClaw both run against the Omniroute gateway, which the setup step writes into the workspace."
+  },
+  "runtime": {
+    "platform": "linux/amd64",
+    "resources": { "cpu": 2, "memoryGiB": 4, "diskGiB": 10 }
+  },
+  "project": {
+    "workingDirectory": "/workspace/project",
+    "setup": [
+      "mkdir -p .codex && printf '%s\\n' 'model = \"auto/best-coding\"' 'model_provider = \"omniroute\"' 'sandbox_mode = \"danger-full-access\"' 'approval_policy = \"never\"' '' '[model_providers.omniroute]' 'name = \"Omniroute\"' 'base_url = \"https://omni-route.funfiesta.games/v1\"' 'env_key = \"OPENAI_API_KEY\"' 'wire_api = \"responses\"' > .codex/config.toml && cat .codex/config.toml",
+      "mkdir -p .openclaw && printf '%s\\n' '{' '  models: {' '    providers: {' '      omniroute: {' '        baseUrl: \"https://omni-route.funfiesta.games/v1\",' '        apiKey: { source: \"env\", provider: \"default\", id: \"OPENAI_API_KEY\" },' '        auth: \"api-key\",' '        api: \"openai-responses\",' '        models: [' '          { id: \"auto/best-coding\", name: \"auto/best-coding\", api: \"openai-responses\" },' '        ],' '      },' '    },' '  },' '  update: { checkOnStart: false },' '}' > .openclaw/openclaw.json5 && cat .openclaw/openclaw.json5"
+    ],
+    "allowedRepositories": []
+  },
+  "environment": { "CI": "true" },
+  "secrets": [
+    {
+      "name": "OPENAI_API_KEY",
+      "secretRef": "OMNIROUTE_API_KEY",
+      "inject": "env",
+      "hostAllowlist": []
+    }
+  ],
+  "agents": {
+    "allowed": ["echo", "codex", "openclaw", "claude", "opencode"],
+    "maxRuntimeMode": "full-access",
+    "defaults": { "provider": "codex", "permissionMode": "auto" }
+  },
+  "configuration": { "sources": [] },
+  "sandbox": {
+    "isolation": "per-project",
+    "maxConcurrentTasks": 4,
+    "stopAfterIdleMinutes": 30,
+    "deleteAfterCompletedHours": 48
+  }
+}

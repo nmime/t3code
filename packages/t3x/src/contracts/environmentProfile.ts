@@ -24,13 +24,6 @@ import { ExecutionError } from "./errors.js";
 export const PROFILE_API_VERSION = "t3x/v1";
 
 /**
- * Versions the parser still accepts. The contract was named after Daytona
- * before the backend moved to a self-hosted OpenSandbox deployment; profiles
- * written then keep parsing, and nothing writes this version any more.
- */
-export const PROFILE_API_VERSION_ALIASES = ["t3-daytona/v1"] as const;
-
-/**
  * T3's runtime modes, weakest first. The order is the comparison: a profile
  * caps a turn by naming the strongest mode it permits, and a stricter layer
  * can only lower that.
@@ -57,7 +50,7 @@ export const ResourcesSchema = z.object({
 });
 
 export const ProfileBodySchema = z.object({
-  apiVersion: z.union([z.literal(PROFILE_API_VERSION), z.literal(PROFILE_API_VERSION_ALIASES[0])]),
+  apiVersion: z.literal(PROFILE_API_VERSION),
   kind: z.literal("EnvironmentProfile"),
   metadata: z.object({
     name: z.string().min(1),

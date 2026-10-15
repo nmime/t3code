@@ -229,40 +229,16 @@ of which are now covered by `src/server/events.test.ts`:
   thread from the worker's native id on `thread.updated` — either one leaves two
   provider-thread rows per app thread, with `activeProviderThreadId` flapping
   between them.
-
-### What the tests still do not prove
-
-One leg, and it is environmental rather than code: a _remote_ sandbox dialing a
-control plane across a network boundary. Everywhere a control plane and its
-worker can reach each other (the local backend, a VPS, a self-hosted OpenSandbox
-deployment), the path is the same code and is covered — the local suite runs the
-real child process over a real WebSocket, and the e2e test above runs the whole
-loop. On Daytona's restricted-egress tiers a task sandbox cannot reach a control
-plane hosted anywhere else, which is why the backend moved to a self-hosted
-OpenSandbox deployment; there the run stops with `task.worker_attach_failed`
-after the bundle lands and the worker process starts. `packages/t3x/README.md`
-says the same thing from the control plane's side.
-
-## Renamed from Daytona
-
-The package, the driver and the control plane were named after Daytona, the
-managed sandbox product this integration was first built against. The backend is
-now a self-hosted OpenSandbox deployment, so the names followed it:
-
-| before                                 | now                             |
-| -------------------------------------- | ------------------------------- |
-| `@t3tools/provider-daytona`            | `@t3tools/provider-opensandbox` |
-| `DaytonaDriver`                        | `OpenSandboxDriver`             |
-| `DaytonaAdapterV2Driver`               | `OpenSandboxAdapterV2Driver`    |
-| `DAYTONA_DRIVER`                       | `OPENSANDBOX_DRIVER`            |
-| `driver: "daytona"`                    | `driver: "opensandbox"`         |
-| `@t3tools/daytona` (the control plane) | `@t3tools/t3x`                  |
-
-Two names are kept on purpose, because they are stored rather than imported: a
-`providerInstances` entry that still says `"driver": "daytona"` is renamed when
-the server loads its settings (`PROVIDER_DRIVER_RENAMES` in
-`apps/server/src/serverSettings.ts`), and an environment profile that still says
-`apiVersion: t3-daytona/v1` still parses. Nothing writes either any more.
+  One leg, and it is environmental rather than code: a _remote_ sandbox dialing a
+  control plane across a network boundary. Everywhere a control plane and its
+  worker can reach each other (the local backend, a VPS, a self-hosted OpenSandbox
+  deployment), the path is the same code and is covered — the local suite runs the
+  real child process over a real WebSocket, and the e2e test above runs the whole
+  loop. Where the sandbox's network is filtered — a provider that limits a
+  sandbox's egress by policy, or a host firewall between the two — the run stops
+  with `task.worker_attach_failed` after the bundle lands and the worker process
+  starts. `packages/t3x/README.md` says the same thing from the control plane's
+  side.
 
 ## Typechecking
 

@@ -72,6 +72,11 @@ export class SecretsBroker {
     return this.store.getSecretCipher(name) !== null;
   }
 
+  /** The names in the store — never a value, and never a policy. */
+  listNames(): string[] {
+    return this.store.listSecretNames();
+  }
+
   get(name: string, profileId: string): string {
     const row = this.store.getSecretCipher(name);
     if (!row) throw new SecretNotFoundError(name);

@@ -43,6 +43,8 @@ Usage:
   t3x profile add --id ID --file FILE.yaml
   t3x profile list
   t3x profile resolve --id ID [--overrides FILE.yaml]
+  t3x secret put NAME [--value V | --stdin] [--profiles a,b] [--hosts a,b]
+  t3x secret list
   t3x project list
   t3x project add --repo URL [--id ID] [--name NAME] [--default-scope project|task] [--max-tasks N]
   t3x project sandboxes [--id ID]
@@ -101,6 +103,8 @@ async function main(): Promise<void> {
       return serve(rest);
     case "profile":
       return profile(rest);
+    case "secret":
+      return secret(rest);
     case "task":
       return task(rest);
     case "project":
@@ -384,6 +388,51 @@ async function profile(args: string[]): Promise<void> {
     return;
   }
   throw new Error(`unknown profile subcommand ${sub}`);
+}
+
+/**
+ * `t3x secret put|list` — the credentials a profile injects into a task.
+ *
+ * A profile names a secret by reference (`secretRef`), so the value lives in
+ * the control plane's encrypted store and never in the profile body, in a task
+ * request or in a workspace file. This is the documented way to install the
+ * model key a coding agent needs: before it existed the only route was a
+ * one-off node script reaching into the broker, which is exactly how
+ * deployments ended up being set up.
+ */
+async function secret(args: string[]): Promise<void> {
+  const [sub, ...rest] = args;
+  const flags = parseFlags(rest);
+  await withServer(
+    rest,
+    async (server) => {
+      if (sub === "put") {
+        const name = flags.name ?? rest.find((a) => !a.startsWith("--"));
+        if (!name) throw new Error("secret put requires a NAME");
+        const value = flags.value ?? (await readStdinTrimmed());
+        if (!value) throw new Error("secret put needs --value or a value on stdin");
+        const allowedProfiles = (flags.profiles ?? "default")
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0);
+        const hostAllowlist = (flags.hosts ?? "")
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0);
+        server.secrets.put(name, value, { allowedProfiles, hostAllowlist });
+        // The name, the profiles it is allowed for, and nothing else: a CLI
+        // that echoed a secret would put it in a shell history or a journal.
+        console.log(JSON.stringify({ name, allowedProfiles, hostAllowlist }, null, 2));
+        return;
+      }
+      if (sub === "list") {
+        console.log(JSON.stringify({ secrets: server.secrets.listNames() }, null, 2));
+        return;
+      }
+      throw new Error(`unknown secret subcommand ${sub}`);
+    },
+    { startEffects: false },
+  );
 }
 
 async function task(args: string[]): Promise<void> {
@@ -748,6 +797,17 @@ async function probeOpenSandbox(options: {
       detail: `${shown} failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/**
+ * Read a value piped on stdin, trimmed. Empty when stdin is a terminal, which
+ * is what makes `--value` and a pipe the two ways to give a secret.
+ */
+async function readStdinTrimmed(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer));
+  return Buffer.concat(chunks).toString("utf8").trim();
 }
 
 function parseFlags(args: string[]): Record<string, string> {
