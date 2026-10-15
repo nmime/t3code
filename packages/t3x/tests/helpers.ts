@@ -60,6 +60,8 @@ export async function createTask(
     /** "project" (default) shares one sandbox per repo; "task" is dedicated. */
     scope?: "project" | "task";
     projectId?: string;
+    /** The app thread this task serves, as the provider driver passes it. */
+    threadId?: string;
   } = {},
 ): Promise<TaskRecord> {
   const profileId = input.profileId ?? "test";
@@ -78,6 +80,7 @@ export async function createTask(
     ...(input.budgetCents !== undefined ? { budgetCents: input.budgetCents } : {}),
     ...(input.scope ? { scope: input.scope } : {}),
     ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(input.threadId ? { threadId: input.threadId } : {}),
   });
   await server.effectWorker.drain();
   await waitFor(() => server.registry.isConnected(task.taskId), 30_000, "worker attach");

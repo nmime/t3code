@@ -33,6 +33,12 @@ export type Operation = keyof ProviderTextGeneration;
 export interface Request<S extends Schema.Top> {
   readonly operation: Operation;
   readonly cwd: string;
+  /**
+   * The app thread the generation belongs to, when the caller knows it: a
+   * sandbox provider resolves the task by thread, because `cwd` is the path the
+   * app has open rather than a path inside a sandbox.
+   */
+  readonly threadId?: string | undefined;
   readonly prompt: string;
   readonly outputSchema: S;
   readonly modelSelection: ModelSelection;
@@ -101,6 +107,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     const generated = yield* run({
       operation: "generateCommitMessage",
       cwd: input.cwd,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
       modelSelection: input.modelSelection,
       ...buildCommitMessagePrompt({
         branch: input.branch,
@@ -125,6 +132,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     const generated = yield* run({
       operation: "generatePrContent",
       cwd: input.cwd,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
       modelSelection: input.modelSelection,
       ...buildPrContentPrompt({
         baseBranch: input.baseBranch,
@@ -145,6 +153,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     const generated = yield* run({
       operation: "generateBranchName",
       cwd: input.cwd,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
       modelSelection: input.modelSelection,
       attachments: input.attachments,
       ...buildBranchNamePrompt({
@@ -162,6 +171,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     const generated = yield* run({
       operation: "generateThreadTitle",
       cwd: input.cwd,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
       modelSelection: input.modelSelection,
       attachments: input.attachments,
       ...buildThreadTitlePrompt({
@@ -183,6 +193,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     return yield* run({
       operation: "generateReviewGuide",
       cwd: input.cwd,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
       modelSelection: input.modelSelection,
       investigate: { timeoutMs: INVESTIGATION_TIMEOUT_MS },
       ...buildReviewGuidePrompt(input),

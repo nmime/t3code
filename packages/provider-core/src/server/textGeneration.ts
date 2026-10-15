@@ -19,6 +19,14 @@ export interface CommitMessageGenerationInput {
   policy?: TextGenerationPolicy | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
+  /**
+   * The app thread this generation belongs to, when the caller knows it.
+   *
+   * A sandbox provider has to resolve the task the prompt runs in, and `cwd` is
+   * the path the *app* has open — for a remote project that is the host copy,
+   * which no task owns. The thread is the key that always lands.
+   */
+  threadId?: string | undefined;
 }
 
 export interface CommitMessageGenerationResult {
@@ -39,6 +47,14 @@ export interface PrContentGenerationInput {
   policy?: TextGenerationPolicy | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
+  /**
+   * The app thread this generation belongs to, when the caller knows it.
+   *
+   * A sandbox provider has to resolve the task the prompt runs in, and `cwd` is
+   * the path the *app* has open — for a remote project that is the host copy,
+   * which no task owns. The thread is the key that always lands.
+   */
+  threadId?: string | undefined;
 }
 
 export interface PrContentGenerationResult {
@@ -53,6 +69,14 @@ export interface BranchNameGenerationInput {
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
+  /**
+   * The app thread this generation belongs to, when the caller knows it.
+   *
+   * A sandbox provider has to resolve the task the prompt runs in, and `cwd` is
+   * the path the *app* has open — for a remote project that is the host copy,
+   * which no task owns. The thread is the key that always lands.
+   */
+  threadId?: string | undefined;
 }
 
 export interface BranchNameGenerationResult {
@@ -68,6 +92,14 @@ export interface ThreadTitleGenerationInput {
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
+  /**
+   * The app thread this generation belongs to, when the caller knows it.
+   *
+   * A sandbox provider has to resolve the task the prompt runs in, and `cwd` is
+   * the path the *app* has open — for a remote project that is the host copy,
+   * which no task owns. The thread is the key that always lands.
+   */
+  threadId?: string | undefined;
 }
 
 export interface ThreadTitleGenerationResult {
@@ -107,6 +139,14 @@ export interface ReviewGuideGenerationInput {
   stack?: ReadonlyArray<ReviewGuideStackLayer> | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
+  /**
+   * The app thread this generation belongs to, when the caller knows it.
+   *
+   * A sandbox provider has to resolve the task the prompt runs in, and `cwd` is
+   * the path the *app* has open — for a remote project that is the host copy,
+   * which no task owns. The thread is the key that always lands.
+   */
+  threadId?: string | undefined;
 }
 
 /** A guide as the model wrote it, before the server holds it to the change. */

@@ -116,6 +116,45 @@ test("a text generation leaves the task's event log untouched", async () => {
   }
 });
 
+test("a generation is resolved by thread, and waits for the task it names", async () => {
+  const origin = localOriginRepo();
+  const server = await startTestServer({ stateDir: tempStateDir() });
+  try {
+    const threadId = "thread_title_of_a_brand_new_thread";
+    // The app asks for a thread title at the moment the thread's first message
+    // creates its task, and the path it sends is its own checkout — which no
+    // task owns. Naming the thread is what makes it land; the wait covers the
+    // race with the task's creation.
+    const pending = call(server, "POST", "/text-generation", {
+      cwd: "/srv/t3-workspace",
+      threadId,
+      prompt: "title this thread",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const task = await createTask(server, { repositoryUrl: origin.url, threadId });
+
+    const generated = await pending;
+    assert.equal(generated.status, 200, JSON.stringify(generated.body));
+    assert.equal(typeof generated.body["text"], "string");
+    assert.equal(
+      server.tasks.events(task.taskId).filter((event) => event.type === "turn.updated").length,
+      0,
+      "the generation is still not a turn",
+    );
+
+    // A path no task owns, with no thread that has one, is still refused.
+    const refused = await call(server, "POST", "/text-generation", {
+      cwd: "/srv/t3-workspace",
+      threadId: "thread_without_a_task",
+      prompt: "hello",
+    });
+    assert.equal(refused.status, 404, JSON.stringify(refused.body));
+    assert.equal((refused.body["error"] as { code: string }).code, "task_not_found");
+  } finally {
+    await server.stop();
+  }
+});
+
 test("error codes map to statuses a client can branch on", () => {
   assert.equal(statusForErrorCode("task_not_found"), 404);
   assert.equal(statusForErrorCode("idempotency_conflict"), 409);

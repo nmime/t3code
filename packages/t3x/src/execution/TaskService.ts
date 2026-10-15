@@ -128,7 +128,7 @@ export class TaskService {
     prompt: string;
     model?: string;
   }): Promise<{ text: string }> {
-    const task = this.taskForGeneration(input);
+    const task = await this.taskForGeneration(input);
     await this.controlPlane.ensureReady(task.taskId);
     const reply = await this.registry.sendCommand(
       task.taskId,
@@ -164,15 +164,24 @@ export class TaskService {
    * "no sandbox workspace is /srv/t3-workspace" for every thread, so a thread's
    * title was never generated. The path stays as the fallback for a caller that
    * only has one.
+   *
+   * A thread named before its task exists — the first message of a thread asks
+   * for a title at the same moment the task is created — is waited for, briefly,
+   * rather than refused.
    */
-  private taskForGeneration(input: { cwd?: string; threadId?: string }): TaskRecord {
+  private async taskForGeneration(input: { cwd?: string; threadId?: string }): Promise<TaskRecord> {
     const threadId = input.threadId?.trim();
     if (threadId) {
-      const task = this.store
-        .listTasks()
-        .filter((candidate) => candidate.threadId === threadId)
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-      if (task) return task;
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const task = this.store
+          .listTasks()
+          .filter((candidate) => candidate.threadId === threadId)
+          .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+        if (task) return task;
+        if (Date.now() >= deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
     }
     const cwd = (input.cwd ?? "").trim();
     if (!cwd) {

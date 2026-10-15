@@ -101,7 +101,7 @@ export const makeSandboxTextGeneration = (
       // Name the thread when the app's checkout is one a session has claimed:
       // the control plane resolves the task by thread, because the path in the
       // request is the host copy of the project, which no task owns.
-      const threadId = threadForWorkspace(request.cwd);
+      const threadId = request.threadId ?? threadForWorkspace(request.cwd);
       const text = yield* Effect.tryPromise({
         try: () =>
           client.generateText({
