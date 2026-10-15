@@ -166,6 +166,45 @@ test("a finished turn is closed in T3's projection, not only in the run", () => 
   assert.equal(terminal?.status, "completed");
 });
 
+test("a turn that ends with the assistant stream open still commits the reply", () => {
+  const mapper = new ProviderEventMapper(context());
+  mapper.map(
+    event(
+      "turn.updated",
+      { runId: "run_cp", providerTurn: { providerTurnId: "turn_cp", runId: "run_cp" } },
+      1,
+    ),
+  );
+  // A CLI agent streams its output line by line and — before the worker closed
+  // its own stream — never sent a final update with `streaming: false`: the
+  // text arrived, the turn ended, and the reply never appeared in the thread,
+  // because T3 keeps a turn item `running` until the stream is closed and
+  // renders completed items only.
+  mapper.map(
+    event(
+      "message.updated",
+      {
+        runId: "run_cp",
+        message: { messageId: "m1", role: "assistant", text: "hello", streaming: true },
+      },
+      2,
+    ),
+  );
+  const mapped = mapper.map(
+    event("turn.terminal", { runId: "run_cp", providerTurnId: "turn_cp", status: "completed" }, 3),
+  );
+  assert.deepEqual(
+    mapped.map((e) => e.type),
+    ["provider_turn.updated", "message.updated", "turn_item.updated", "turn.terminal"],
+  );
+  const closing = mapped[1] as { message: { text: string; streaming: boolean } };
+  assert.equal(closing.message.text, "hello", "the accumulated text survives the close");
+  assert.equal(closing.message.streaming, false);
+  const item = mapped[2] as { turnItem: { status: string; text: string } };
+  assert.equal(item.turnItem.status, "completed", "a running item is not rendered");
+  assert.equal(item.turnItem.text, "hello");
+});
+
 test("a failed turn is closed as failed", () => {
   const mapper = new ProviderEventMapper(context());
   mapper.map(

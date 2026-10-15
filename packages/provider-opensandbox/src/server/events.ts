@@ -286,9 +286,47 @@ export class ProviderEventMapper {
         }
         const providerThreadId = this.thread?.id ?? ProviderThreadId.make(this.context.appThreadId);
         const runOrdinal = Math.max(1, existing?.ordinal ?? 1);
+        // A runtime whose last update was `streaming: true` leaves T3's turn
+        // item `running`, and a running item is not rendered: the text arrived,
+        // the turn ended, and the thread showed nothing. Close whatever this
+        // run left open, so the accumulated reply is committed even when the
+        // agent's own runtime forgot to close its stream.
+        const openMessage = runId ? this.streaming.get(runId) : undefined;
+        if (openMessage !== undefined && runId) this.streaming.delete(runId);
+        const closeOpenMessage: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> =
+          openMessage === undefined
+            ? []
+            : [
+                {
+                  type: "message.updated",
+                  driver: this.context.driver,
+                  message: this.message({
+                    messageId: openMessage.messageId,
+                    role: "assistant",
+                    text: openMessage.text,
+                    runId: context.runId ?? null,
+                    at: event.ts,
+                    streaming: false,
+                  }),
+                },
+                {
+                  type: "turn_item.updated",
+                  driver: this.context.driver,
+                  turnItem: this.assistantTurnItem({
+                    messageId: openMessage.messageId,
+                    text: openMessage.text,
+                    runId: context.runId ?? null,
+                    providerThreadId: this.thread?.id ?? null,
+                    providerTurnId: context.providerTurnId ?? null,
+                    at: event.ts,
+                    streaming: false,
+                  }),
+                },
+              ];
         if (status === "failed") {
           return [
             ...terminalTurn,
+            ...closeOpenMessage,
             {
               type: "turn.terminal",
               driver: this.context.driver,
@@ -307,6 +345,7 @@ export class ProviderEventMapper {
         }
         return [
           ...terminalTurn,
+          ...closeOpenMessage,
           {
             type: "turn.terminal",
             driver: this.context.driver,

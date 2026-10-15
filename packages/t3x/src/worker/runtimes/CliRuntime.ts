@@ -175,6 +175,28 @@ export class CliRuntime implements WorkerProviderRuntime {
         },
       });
     };
+    // Every chunk above is `streaming: true`, and a consumer that only commits
+    // an assistant message once the stream is closed (T3's mapper marks the
+    // turn item `running` until then, and renders completed items only) showed
+    // nothing at all for a CLI turn: the text arrived, the turn ended, and the
+    // reply never appeared in the thread. Close the message the last chunk
+    // opened — same id, empty delta, `streaming: false` — before the turn's
+    // outcome, so the accumulated text is committed.
+    const closeMessage = () => {
+      if (messageId === 0) return;
+      this.emit({
+        type: "message.updated",
+        driver: this.driver,
+        threadId: payload.threadId,
+        runId: payload.runId,
+        message: {
+          messageId: `${providerTurnId}_m0`,
+          role: "assistant",
+          text: "",
+          streaming: false,
+        },
+      });
+    };
 
     let buffer = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -205,6 +227,7 @@ export class CliRuntime implements WorkerProviderRuntime {
     child.on("close", (code) => {
       finish(() => {
         if (buffer.trim()) emitLine(buffer.trim());
+        closeMessage();
         this.emit({
           type: "turn.terminal",
           driver: this.driver,

@@ -383,6 +383,22 @@ test("a CLI agent gets a closed stdin, so it cannot wait for input that never co
       "the agent read EOF rather than blocking forever",
     );
     assert.ok(events.some((e) => JSON.stringify(e.payload).includes("agent-finished")));
+
+    // The assistant stream has to be closed before the turn's outcome. T3's
+    // mapper keeps the turn item `running` until an update arrives with
+    // `streaming: false`, and a running item is not rendered — so a CLI turn
+    // that ended with an open stream showed the user nothing at all.
+    const updates = events.filter((e) => e.type === "message.updated");
+    const last = JSON.parse(JSON.stringify(updates[updates.length - 1]!.payload)) as {
+      message: { streaming: boolean; text: string };
+    };
+    assert.equal(last.message.streaming, false, "the assistant message is closed");
+    assert.equal(last.message.text, "", "the closing update carries no text of its own");
+    assert.ok(
+      events.findIndex((e) => e.type === "turn.terminal") >
+        events.indexOf(updates[updates.length - 1]!),
+      "the message is closed before turn.terminal",
+    );
   } finally {
     await server.stop();
     process.env.PATH = originalPath;
