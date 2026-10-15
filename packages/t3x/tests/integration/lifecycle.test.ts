@@ -27,7 +27,14 @@ import {
 test("scenario 1: separate sandboxes for different providers", async () => {
   const stateDir = tempStateDir();
   const binDir = fakeAgentBinDir(
-    ["#!/usr/bin/env bash", 'echo "codex agent running in $PWD"', "echo done"].join("\n"),
+    [
+      "#!/usr/bin/env bash",
+      'echo "codex agent running in $PWD"',
+      // The argv the runtime hands the CLI, so a test can assert the flags a
+      // real codex needs (`--skip-git-repo-check`) actually travel.
+      'echo "codex argv: $*"',
+      "echo done",
+    ].join("\n"),
   );
   const originalPath = process.env.PATH;
   process.env.PATH = `${binDir}:${originalPath}`;
@@ -71,6 +78,17 @@ test("scenario 1: separate sandboxes for different providers", async () => {
     );
     assert.ok(codexEvents.some((e) => e.type === "turn.terminal"));
 
+    // codex refuses to run outside a repository it trusts ("Not inside a
+    // trusted directory and --skip-git-repo-check was not specified") and a
+    // scratch task has no repository, so the flag has to be in the argv.
+    assert.ok(
+      codexEvents.some(
+        (e) =>
+          e.type === "message.updated" &&
+          JSON.stringify(e.payload).includes("codex argv: exec --skip-git-repo-check"),
+      ),
+      "the codex CLI is invoked with --skip-git-repo-check",
+    );
     // Provider selection did not leak across tasks.
     assert.ok(
       !server.tasks

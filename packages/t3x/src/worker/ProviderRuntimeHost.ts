@@ -81,7 +81,13 @@ export class ProviderRuntimeHost {
     const agents: Record<string, CliRuntimeConfig> = {
       codex: {
         driver: "codex",
-        command: 'codex exec "$PROMPT"',
+        // `--skip-git-repo-check`: codex refuses to run outside a repository it
+        // trusts ("Not inside a trusted directory") unless the flag is given,
+        // and a task may be scoped to a scratch workspace with no repository at
+        // all. The sandbox is the isolation boundary here — the CLI runs as the
+        // only tenant of a throwaway container — so the check buys nothing and
+        // costs every repository-less task its turn.
+        command: 'codex exec --skip-git-repo-check "$PROMPT"',
         configEnv: { CODEX_HOME: `${options.configHome}/.codex` },
       },
       claude: {
