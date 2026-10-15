@@ -36,6 +36,14 @@ ENV PNPM_HOME=/root/.local/share/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
 
+# The coding agent the worker drives inside the sandbox: the `codex` runtime
+# runs `codex exec "$PROMPT"` (see worker/ProviderRuntimeHost.ts), so the
+# binary has to be on PATH here. Pinned on purpose — the CLI's flags and its
+# wire protocol change between releases, and the runtime above was written
+# against this one. `bubblewrap` is deliberately not installed: codex falls
+# back to the copy it ships, and the container itself is the isolation boundary.
+RUN npm install -g @openai/codex@0.162.1
+
 # T3 Code's own defaults; a task's profile may override either.
 ENV CI=1
 ENV NODE_ENV=development
