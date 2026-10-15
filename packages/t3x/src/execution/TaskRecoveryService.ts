@@ -42,7 +42,7 @@ export class TaskRecoveryService {
 
   /** Boot-time recovery. */
   async recover(): Promise<ReconcileReport> {
-    const report = await this.deps.controlPlane.reconcile();
+    const report = await this.reconcileSafely();
     this.deps.store.appendEvents("system", "recovery", [
       { type: "recovery.completed", payload: report as unknown as Record<string, unknown> },
     ]);
@@ -54,7 +54,7 @@ export class TaskRecoveryService {
    * operators can see why a sandbox stopped or disappeared.
    */
   async sweep(): Promise<{ report: ReconcileReport; policyActions: string[] }> {
-    const report = await this.deps.controlPlane.reconcile();
+    const report = await this.reconcileSafely();
     const policyActions: string[] = [];
 
     for (const decision of this.policy.evaluate()) {
@@ -92,5 +92,37 @@ export class TaskRecoveryService {
     }
 
     return { report, policyActions };
+  }
+
+  /**
+   * Reconcile, but never throw.
+   *
+   * Measured on the deployment: rebuilding the sandbox image left paused
+   * sandboxes pointing at an image id that no longer existed, the provider's
+   * `GET /v1/sandboxes` started answering 500, and the sweep's rejection was
+   * unhandled — Node exited, systemd restarted the process, the boot reconcile
+   * hit the same 500, and the loop created a sandbox on every attempt.
+   *
+   * A provider that cannot be listed is an outage of the *provider*: the API,
+   * the event log and every task bound to a live worker are still usable, so
+   * the failure is reported and retried on the next sweep instead of killing
+   * the control plane.
+   */
+  private async reconcileSafely(): Promise<ReconcileReport> {
+    try {
+      return await this.deps.controlPlane.reconcile();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`t3x: reconcile failed, continuing: ${message}`);
+      return {
+        checked: 0,
+        reattached: 0,
+        restored: 0,
+        stopped: 0,
+        renewed: 0,
+        destroyedOrphans: 0,
+        notes: [`reconcile failed: ${message}`],
+      };
+    }
   }
 }

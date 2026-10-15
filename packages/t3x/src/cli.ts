@@ -318,7 +318,12 @@ async function serve(args: string[]): Promise<void> {
 
   await server.recovery.recover();
   const sweep = setInterval(() => {
-    void server.recovery.sweep();
+    // The sweep contains its own provider failures; this catch is the last
+    // line of defence. An unhandled rejection here exits the process, and
+    // systemd restarts it straight into the same failure.
+    void server.recovery.sweep().catch((err: unknown) => {
+      console.error(`t3x: sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
   }, 60_000);
   sweep.unref?.();
 
