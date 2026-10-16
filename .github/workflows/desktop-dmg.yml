@@ -78,17 +78,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Artifacts need a token to download; a release asset does not, and its URL
-      # is stable enough to hand to a machine that cannot pull from GitHub
-      # directly (a relay such as gh-proxy.com turns 58 KiB/s into 8 MB/s).
+      # Artifacts need a token to download; a release asset does not, and it can
+      # be handed to a machine that cannot pull from GitHub directly (a relay
+      # such as gh-proxy.com turns 58 KiB/s into 8 MB/s). The tag is FIXED per
+      # arch, not per run, so a URL written down in the docs never rots: every
+      # later run replaces the asset and rewrites the notes with its commit.
       - name: Publish the dmg as a release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="dmg-${{ inputs.arch }}-run${{ github.run_number }}"
-          gh release create "$tag" \
-            release/*.dmg release/*.zip \
-            --title "macOS ${{ inputs.arch }} dmg - run ${{ github.run_number }}" \
-            --notes "Unsigned desktop build of \`${{ github.ref_name }}\` at ${{ github.sha }}. Not notarized: after installing, run \`xattr -dr com.apple.quarantine \"/Applications/T3 Code (Alpha).app\"\`." \
-            --target "${{ github.sha }}"
+          tag="dmg-${{ inputs.arch }}"
+          notes="Unsigned desktop build of \`${{ github.ref_name }}\` at ${{ github.sha }}. Not notarized: after installing, run \`xattr -dr com.apple.quarantine \"/Applications/T3 Code (Alpha).app\"\`."
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" \
+                 --title "macOS ${{ inputs.arch }} dmg (latest, unsigned)" \
+                 --notes "$notes" --target "${{ github.sha }}"
+          gh release upload "$tag" release/*.dmg release/*.zip --clobber
+          gh release edit "$tag" \
+            --title "macOS ${{ inputs.arch }} dmg (latest, unsigned)" --notes "$notes"
           echo "release: https://github.com/${{ github.repository }}/releases/tag/$tag"
