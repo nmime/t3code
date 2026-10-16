@@ -1,0 +1,94 @@
+name: Desktop dmg (fork)
+
+# Builds an UNSIGNED macOS .dmg of this branch on a GitHub-hosted macOS runner.
+# Purpose: nobody has to clone ~300 MB of history and install ~4 GB of
+# node_modules over a slow link just to run the desktop app.
+#
+# Manual only: Actions -> "Desktop dmg (fork)" -> Run workflow.
+# The runner is macos-14 (Apple silicon). arm64 builds natively there;
+# x64 is cross-built by electron-builder on the same runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "arm64 | x64 | universal"
+        required: true
+        default: "arm64"
+      version:
+        description: "Version baked into the app"
+        required: true
+        default: "0.0.0-fork"
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - name: Checkout (sparse, .repos excluded)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Setup Rust (native resource monitor)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Public configuration
+        run: cp .env.example .env
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
+
+      - name: Build JS bundle (server + web + electron main)
+        run: vp run build:desktop
+
+      - name: Package dmg (unsigned)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch "${{ inputs.arch }}" --output-dir release
+
+      - name: List artifacts
+        run: ls -la release/
+
+      - name: Upload dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: t3code-macos-${{ inputs.arch }}-dmg
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      # Artifacts need a token to download; a release asset does not, and its URL
+      # is stable enough to hand to a machine that cannot pull from GitHub
+      # directly (a relay such as gh-proxy.com turns 58 KiB/s into 8 MB/s).
+      - name: Publish the dmg as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="dmg-${{ inputs.arch }}-run${{ github.run_number }}"
+          gh release create "$tag" \
+            release/*.dmg release/*.zip \
+            --title "macOS ${{ inputs.arch }} dmg - run ${{ github.run_number }}" \
+            --notes "Unsigned desktop build of \`${{ github.ref_name }}\` at ${{ github.sha }}. Not notarized: after installing, run \`xattr -dr com.apple.quarantine \"/Applications/T3 Code (Alpha).app\"\`." \
+            --target "${{ github.sha }}"
+          echo "release: https://github.com/${{ github.repository }}/releases/tag/$tag"
