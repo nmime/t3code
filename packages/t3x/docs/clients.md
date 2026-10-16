@@ -61,12 +61,13 @@ A plain `git clone` of this repo is ~300 MB of pack and a full `pnpm install` is
 by `.github/workflows/desktop-dmg.yml` on a GitHub-hosted `macos-14` runner
 (free: the fork is public). Actions → **Desktop dmg (fork)** → *Run workflow*
 (`arm64` by default). It takes ~7 minutes and publishes the dmg **as a release
-asset** (`dmg-<arch>-run<N>`), so no token is needed to fetch it:
+asset** under a **stable tag per arch** (`dmg-arm64`), which every later run
+overwrites, so no token is needed to fetch it and the URL below keeps working:
 
 ```bash
 # GitHub is a 58 KiB/s hop from some networks and a relay is 8-12 MB/s:
 curl -L -o ~/Downloads/T3-Code.dmg \
-  "https://gh-proxy.com/https://github.com/nmime/t3code/releases/download/dmg-arm64-run1/T3-Code-0.0.0-fork-arm64.dmg"
+  "https://gh-proxy.com/https://github.com/nmime/t3code/releases/download/dmg-arm64/T3-Code-0.0.0-fork-arm64.dmg"
 shasum -a 256 ~/Downloads/T3-Code.dmg   # compare with the release asset's digest
 
 hdiutil attach -nobrowse ~/Downloads/T3-Code.dmg
@@ -75,6 +76,11 @@ hdiutil detach "/Volumes/T3 Code (Alpha) 0.0.0-fork Installer"
 xattr -dr com.apple.quarantine "/Applications/T3 Code (Alpha).app"   # unsigned build
 open "/Applications/T3 Code (Alpha).app"
 ```
+
+The asset name carries the workflow's `version` input (`0.0.0-fork` by default);
+a run with another version adds a second asset to the same release rather than
+replacing this one. Drop the `https://gh-proxy.com/` prefix to fetch from GitHub
+itself — same file, and the release notes say which commit it was built from.
 
 Then point it at the server, in the app: **Settings → Connections → Add
 environment → Remote link**, and paste a pairing URL into the Host field (it
