@@ -60,13 +60,30 @@ A plain `git clone` of this repo is ~300 MB of pack and a full `pnpm install` is
 4 GB of `node_modules`; on a 60 KiB/s link neither survives. So the build is done
 by `.github/workflows/desktop-dmg.yml` on a GitHub-hosted `macos-14` runner
 (free: the fork is public). Actions → **Desktop dmg (fork)** → *Run workflow*
-(`arm64` by default) → download the artifact from the run.
-
-It does the same steps as B below, and the result is unsigned, so:
+(`arm64` by default). It takes ~7 minutes and publishes the dmg **as a release
+asset** (`dmg-<arch>-run<N>`), so no token is needed to fetch it:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/T3 Code (Alpha).app"
+# GitHub is a 58 KiB/s hop from some networks and a relay is 8-12 MB/s:
+curl -L -o ~/Downloads/T3-Code.dmg \
+  "https://gh-proxy.com/https://github.com/nmime/t3code/releases/download/dmg-arm64-run1/T3-Code-0.0.0-fork-arm64.dmg"
+shasum -a 256 ~/Downloads/T3-Code.dmg   # compare with the release asset's digest
+
+hdiutil attach -nobrowse ~/Downloads/T3-Code.dmg
+ditto "/Volumes/T3 Code (Alpha) 0.0.0-fork Installer/T3 Code (Alpha).app" "/Applications/T3 Code (Alpha).app"
+hdiutil detach "/Volumes/T3 Code (Alpha) 0.0.0-fork Installer"
+xattr -dr com.apple.quarantine "/Applications/T3 Code (Alpha).app"   # unsigned build
+open "/Applications/T3 Code (Alpha).app"
 ```
+
+Then point it at the server, in the app: **Settings → Connections → Add
+environment → Remote link**, and paste a pairing URL into the Host field (it
+fills the host and the code); or open a pairing link in the app's browser tab,
+which pairs that tab only and does not survive a restart. Once the environment
+shows **Connected**, pick it in the composer's *Run on* switcher — the app then
+lists that server's threads and reconnects to it on every launch.
+
+It does the same steps as B below.
 
 ### B. Build it on the Mac
 
