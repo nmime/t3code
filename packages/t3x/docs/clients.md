@@ -50,20 +50,57 @@ Open the pairing link in a browser. Done — same app, same server.
 
 ## Mac, native app (optional)
 
-The desktop app is Electron and builds an unsigned `.dmg` from source. Do this on
-the Mac, not on the VPS (electron-builder's `mac` target needs macOS).
+The desktop app is Electron and only packages on macOS (electron-builder's `mac`
+target), so the build happens either on a GitHub macOS runner or on the Mac
+itself. Neither is needed to use T3 — the PWA above is the whole app.
+
+### A. Let GitHub build it (use this on a slow link)
+
+A plain `git clone` of this repo is ~300 MB of pack and a full `pnpm install` is
+4 GB of `node_modules`; on a 60 KiB/s link neither survives. So the build is done
+by `.github/workflows/desktop-dmg.yml` on a GitHub-hosted `macos-14` runner
+(free: the fork is public). Actions → **Desktop dmg (fork)** → *Run workflow*
+(`arm64` by default) → download the artifact from the run.
+
+It does the same steps as B below, and the result is unsigned, so:
 
 ```bash
-git clone -b feat/opensandbox https://github.com/nmime/t3code.git
-cd t3code
-corepack enable && corepack prepare pnpm@11.10.0 --activate   # or use: npx --yes pnpm@11.10.0
-pnpm install
-pnpm dist:desktop:dmg:arm64      # Apple silicon; x64 for Intel, dist:desktop:dmg for universal
+xattr -dr com.apple.quarantine "/Applications/T3 Code (Alpha).app"
 ```
 
-Node `^24.13.1` is required. The dmg lands under `dist/`; open it, drag the app
-to Applications, and on first launch clear the quarantine flag Gatekeeper put on
-an unsigned build:
+### B. Build it on the Mac
+
+Node `^24.13.1`, plus Rust (`rustup`) for `native/resource-monitor`.
+
+```bash
+# 1. the source, without the 300 MB of history: 55 MiB of pack, not ~300.
+#    Re-run `git checkout` after a dropped connection; fetched blobs are kept.
+git clone --filter=blob:none --depth 1 --sparse -b feat/opensandbox \
+  https://github.com/nmime/t3code.git
+cd t3code
+git sparse-checkout set --no-cone '/*' '!/.repos/'   # .repos is 21,835 vendored files
+git checkout
+
+# ...or, if even that stalls, one resumable file instead of a clone (110.8 MiB):
+#   curl -L -C - -o t3code.tar.gz \
+#     https://codeload.github.com/nmime/t3code/tar.gz/refs/heads/feat/opensandbox
+#   tar xzf t3code.tar.gz && mv t3code-feat-opensandbox t3code && cd t3code
+
+# 2. only what the desktop build needs: 2255 packages, 1.6 GB, ~0.7 GB downloaded
+#    (a plain `pnpm install` installs the whole workspace: 4 GB)
+npx --yes pnpm@11.10.0 install \
+  --filter=t3... --filter=@t3tools/web... \
+  --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+# 3. package. electron-builder fetches Electron (~110 MB) from GitHub here; if
+#    GitHub is the slow hop, mirror it: export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+CSC_IDENTITY_AUTO_DISCOVERY=false npx --yes pnpm@11.10.0 dist:desktop:dmg:arm64
+```
+
+`dist:desktop:dmg:arm64` for Apple silicon, `dist:desktop:dmg:x64` for Intel,
+`dist:desktop:dmg` for universal. The dmg lands under `release/`; open it, drag
+the app to Applications, and on first launch clear the quarantine flag Gatekeeper
+put on an unsigned build:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/T3 Code (Alpha).app"
