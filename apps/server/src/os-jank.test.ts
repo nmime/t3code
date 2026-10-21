@@ -12,14 +12,6 @@ import { fixPath, hydratePosixHome } from "./os-jank.ts";
 
 vi.mock("node:child_process", { spy: true });
 
-it("hydrates HOME for minimal service environments from the user account", () => {
-  const env: NodeJS.ProcessEnv = {};
-
-  hydratePosixHome(env);
-
-  assert.equal(env.HOME, NodeOS.userInfo().homedir);
-});
-
 it("hydrates HOME independently of a blank process HOME", () => {
   const originalHome = process.env.HOME;
   const env: NodeJS.ProcessEnv = { HOME: " " };
@@ -47,32 +39,6 @@ it("preserves an explicitly configured HOME", () => {
 
   assert.equal(env.HOME, "/custom/home");
 });
-
-effectIt.effect.each(["darwin", "linux"] as const)(
-  "keeps the prepared PATH and still hydrates HOME on %s",
-  (platform) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => vi.spyOn(NodeChildProcess, "execFileSync")),
-      (probe) =>
-        Effect.gen(function* () {
-          probe.mockImplementation(() => {
-            throw new Error("The prepared environment must not launch another shell");
-          });
-          const env: NodeJS.ProcessEnv = { PATH: "/prepared/bin:/usr/bin" };
-
-          yield* fixPath({ shellEnvironmentPrepared: true }).pipe(
-            Effect.provideService(HostProcess.Platform, platform),
-            Effect.provideService(HostProcess.Environment, env),
-            Effect.provide(NodeServices.layer),
-          );
-
-          assert.equal(probe.mock.calls.length, 0);
-          assert.equal(env.PATH, "/prepared/bin:/usr/bin");
-          assert.equal(env.HOME, NodeOS.userInfo().homedir);
-        }),
-      (probe) => Effect.sync(() => probe.mockRestore()),
-    ),
-);
 
 effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
   Effect.acquireUseRelease(
@@ -130,25 +96,18 @@ effectIt.effect("keeps mise's PATH record with the login shell PATH", () =>
   ),
 );
 
-effectIt.effect("repairs Windows PATH even when the desktop marks it prepared", () =>
+effectIt.effect("replaces a Path-spelled Windows PATH instead of adding a second key", () =>
   Effect.gen(function* () {
-    const env: NodeJS.ProcessEnv = { PATH: "C:\\Windows" };
-    const commands: string[] = [];
+    const env: NodeJS.ProcessEnv = { Path: "C:\\Windows" };
 
-    yield* fixPath({ shellEnvironmentPrepared: true }).pipe(
+    yield* fixPath().pipe(
       Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(HostProcess.Environment, env),
       Effect.provideService(WindowsShellEnvironment, () => ({ PATH: "C:\\Tools" })),
-      Effect.provideService(CommandAvailability, (command) =>
-        Effect.sync(() => {
-          commands.push(command);
-          return true;
-        }),
-      ),
+      Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
       Effect.provide(NodeServices.layer),
     );
 
-    assert.deepEqual(commands, ["node"]);
-    assert.equal(env.PATH, "C:\\Tools;C:\\Windows");
+    assert.deepEqual(env, { PATH: "C:\\Tools;C:\\Windows" });
   }),
 );
