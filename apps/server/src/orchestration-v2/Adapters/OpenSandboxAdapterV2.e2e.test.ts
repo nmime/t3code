@@ -305,8 +305,12 @@ it.live(
           );
         }),
       }).pipe(
-        Effect.provide(layerWithRegistry(scenario, registryLayer, { runEffectWorker: true })),
-        Effect.provide(TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer))),
+        Effect.provide(
+          Layer.mergeAll(
+            layerWithRegistry(scenario, registryLayer, { runEffectWorker: true }),
+            TestProviderHost.layer(),
+          ).pipe(Layer.provide(NodeServices.layer)),
+        ),
       );
 
       // What T3's own projection holds after the turn: the user's message, and
