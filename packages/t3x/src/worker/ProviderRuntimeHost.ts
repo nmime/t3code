@@ -114,7 +114,15 @@ export class ProviderRuntimeHost {
       },
       claude: {
         driver: "claude",
-        command: "claude -p $PROMPT",
+        // `--dangerously-skip-permissions` for the same reason codex runs with
+        // `sandbox_mode = "danger-full-access"`: the container is the isolation
+        // boundary, and a print-mode turn has nobody to answer a permission
+        // prompt — without it every write and every command comes back denied
+        // and the agent answers "I couldn't create …". The CLI refuses the flag
+        // when it runs as root unless `IS_SANDBOX=1` is set (its "root outside a
+        // deliberate sandbox" guard), so the profile sets that: this *is* a
+        // deliberate sandbox.
+        command: "claude -p --dangerously-skip-permissions $PROMPT",
         configEnv: { CLAUDE_CONFIG_DIR: `${options.configHome}/.claude` },
       },
       opencode: {

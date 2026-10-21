@@ -82,7 +82,7 @@ test("the built-in templates put the prompt in the last argument", () => {
   // a shell function that prints each argument on its own line.
   const templates = [
     "codex exec --skip-git-repo-check $PROMPT",
-    "claude -p $PROMPT",
+    "claude -p --dangerously-skip-permissions $PROMPT",
     "opencode run $PROMPT",
     "pi --prompt $PROMPT",
     "openclaw agent exec --config $CWD/.openclaw/openclaw.json5 --model omniroute/auto/best-coding $PROMPT",

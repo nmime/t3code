@@ -3,8 +3,8 @@
   "kind": "EnvironmentProfile",
   "metadata": {
     "name": "default",
-    "version": 4,
-    "description": "Image-backed sandbox on the OpenSandbox lifecycle server. codex and OpenClaw both run against the Omniroute gateway, which the setup step writes into the workspace."
+    "version": 5,
+    "description": "Image-backed sandbox on the OpenSandbox lifecycle server. codex and OpenClaw both run against the Omniroute gateway, which the setup step writes into the workspace. claude runs against the Claude Code subscription credential the profile injects as CLAUDE_CODE_OAUTH_TOKEN, and IS_SANDBOX=1 is what lets it bypass permissions as root inside the container."
   },
   "runtime": {
     "platform": "linux/amd64",
@@ -18,11 +18,17 @@
     ],
     "allowedRepositories": []
   },
-  "environment": { "CI": "true" },
+  "environment": { "CI": "true", "IS_SANDBOX": "1" },
   "secrets": [
     {
       "name": "OPENAI_API_KEY",
       "secretRef": "OMNIROUTE_API_KEY",
+      "inject": "env",
+      "hostAllowlist": []
+    },
+    {
+      "name": "CLAUDE_CODE_OAUTH_TOKEN",
+      "secretRef": "CLAUDE_CODE_OAUTH_TOKEN",
       "inject": "env",
       "hostAllowlist": []
     }

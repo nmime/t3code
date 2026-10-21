@@ -51,6 +51,14 @@ RUN npm install -g @openai/codex@0.162.1
 # what fetches its native pieces.
 RUN npm install -g openclaw@2026.10.3 --allow-scripts=openclaw
 
+# The third agent runtime the worker drives: `claude -p "$PROMPT"` (see
+# worker/ProviderRuntimeHost.ts). Pinned for the same reason as the other two —
+# the flags and the wire format move between releases. `--allow-scripts` is
+# required: the package's own lifecycle script is what fetches its native
+# binary, and without it the install leaves a CLI that exits with "claude
+# native binary not installed".
+RUN npm install -g @anthropic-ai/claude-code@2.1.306 --allow-scripts=@anthropic-ai/claude-code
+
 # codex's model calls `apply_patch` through its shell tool, and the helper is the
 # codex binary itself, dispatched on argv[0]. Without it on PATH every patch
 # failed with "apply_patch: command not found" and the agent fell back to
