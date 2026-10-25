@@ -85,6 +85,7 @@ export interface ThreadTitleGenerationInput {
   message: string;
   previousTitle?: string | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  instructions?: string | undefined;
   modelSelection: ModelSelection;
   /**
    * The app thread this generation belongs to, when the caller knows it.
