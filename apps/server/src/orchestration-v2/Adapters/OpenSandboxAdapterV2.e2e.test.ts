@@ -33,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import {
   OPENSANDBOX_DRIVER,
@@ -133,16 +134,16 @@ it.live(
               },
             }),
             NodeServices.layer,
-            // The adapter registry resolves an instance's adapter through the
-            // catalog, and since upstream it also carries the MCP provider
-            // sessions a thread can be given.
-            McpProviderSessions.layer,
           ),
         ),
         // The instance registry resolves drivers through the provider host, so
         // it is provided here rather than merged as a sibling: a merged layer
         // does not feed its neighbours.
         Layer.provide(TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer))),
+        // The registry resolves an instance's secret references through this,
+        // and the harness provides the MCP provider sessions itself - its
+        // signature wants a registry layer that still needs them.
+        Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
       );
 
       const threadId = ThreadId.make("thread:opensandbox-e2e");
@@ -309,7 +310,12 @@ it.live(
           Layer.mergeAll(
             layerWithRegistry(scenario, registryLayer, { runEffectWorker: true }),
             TestProviderHost.layer(),
-          ).pipe(Layer.provide(NodeServices.layer)),
+          ).pipe(
+            // The same two the registry is built with above: since upstream the
+            // adapter registry also carries the MCP provider sessions a thread
+            // can be given.
+            Layer.provide(Layer.mergeAll(NodeServices.layer, McpProviderSessions.layer)),
+          ),
         ),
       );
 
