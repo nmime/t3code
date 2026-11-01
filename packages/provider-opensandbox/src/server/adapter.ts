@@ -516,7 +516,7 @@ export const makeAdapter = (
                   : requestInput.decision === "cancel"
                     ? "cancelled"
                     : "approved",
-                requestInput.answers ?? requestInput.response,
+                requestInput.answers,
               );
             },
             catch: (cause) =>
