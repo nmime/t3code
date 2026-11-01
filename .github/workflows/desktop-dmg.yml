@@ -5,7 +5,9 @@ name: Desktop dmg (fork)
 # node_modules over a slow link just to run the desktop app.
 #
 # Manual only: Actions -> "Desktop dmg (fork)" -> Run workflow.
-# The runner is macos-14 (Apple silicon). arm64 builds natively there;
+# The runner is macos-15 (Apple silicon). arm64 builds natively there;
+# (macos-14 images were retired by GitHub on 2026-11-02 - a run on macos-14 is
+# cancelled instantly with a "runner image brownout" annotation.)
 # x64 is cross-built by electron-builder on the same runner.
 
 on:
@@ -25,7 +27,7 @@ permissions:
 
 jobs:
   dmg:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - name: Checkout (sparse, .repos excluded)
