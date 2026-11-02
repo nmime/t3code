@@ -91,7 +91,8 @@ export class ProviderRuntimeHost {
         // `$PROMPT` and `$CWD` are bare on purpose: the worker substitutes a
         // value that is already one shell word (see `substituteCommand`), so
         // quoting them here would put the quotes *inside* the argument.
-        command: "codex exec --skip-git-repo-check $PROMPT",
+        command: "codex exec --skip-git-repo-check $MODEL_ARG $PROMPT",
+        modelFlag: "--model $MODEL",
         configEnv: { CODEX_HOME: `${options.configHome}/.codex` },
       },
       openclaw: {
@@ -104,8 +105,12 @@ export class ProviderRuntimeHost {
         // the profile writes; `--auth-env-only` cannot be combined with it, so
         // the file names the credential through an env reference instead of
         // carrying it (see the profile's setup step).
-        command:
-          "openclaw agent exec --config $CWD/.openclaw/openclaw.json5 --model omniroute/auto/best-coding $PROMPT",
+        command: "openclaw agent exec --config $CWD/.openclaw/openclaw.json5 $MODEL_ARG $PROMPT",
+        // openclaw names models `provider/slug`, and the profile's config pins
+        // the provider to omniroute — so the prefix belongs on the flag, and
+        // the profile's default needs an explicit flag of its own.
+        modelFlag: "--model omniroute/$MODEL",
+        defaultModel: "auto/best-coding",
         configEnv: {
           // State stays inside the task's workspace: one sandbox per task, so
           // there is nothing to share and nothing to leak between them.
@@ -122,12 +127,14 @@ export class ProviderRuntimeHost {
         // when it runs as root unless `IS_SANDBOX=1` is set (its "root outside a
         // deliberate sandbox" guard), so the profile sets that: this *is* a
         // deliberate sandbox.
-        command: "claude -p --dangerously-skip-permissions $PROMPT",
+        command: "claude -p --dangerously-skip-permissions $MODEL_ARG $PROMPT",
+        modelFlag: "--model $MODEL",
         configEnv: { CLAUDE_CONFIG_DIR: `${options.configHome}/.claude` },
       },
       opencode: {
         driver: "opencode",
-        command: "opencode run $PROMPT",
+        command: "opencode run $MODEL_ARG $PROMPT",
+        modelFlag: "--model $MODEL",
         configEnv: { OPENCODE_CONFIG_DIR: `${options.configHome}/.config/opencode` },
       },
       pi: {

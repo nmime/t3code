@@ -34,6 +34,17 @@ export interface CliRuntimeConfig {
    * user message, `$CWD` with the task working directory.
    */
   command: string;
+  /**
+   * How one turn's model becomes a CLI flag: a template whose `$MODEL` is
+   * replaced with the shell-quoted model slug, e.g. `--model $MODEL`. Absent
+   * means the agent's own config decides (the profile's default).
+   */
+  modelFlag?: string;
+  /**
+   * Model used when the turn carries none (or the sentinel "default") — for
+   * agents that need an explicit `--model` even for the profile's default.
+   */
+  defaultModel?: string;
   /** Isolated configuration directories exported to the agent process. */
   configEnv?: Record<string, string>;
   /** Extra environment (non-secret values only). */
@@ -130,11 +141,11 @@ export class CliRuntime implements WorkerProviderRuntime {
     });
 
     const prompt = payload.message.text;
-    const command = substituteCommand(
-      substituteCommand(this.config.command, "$CWD", thread.cwd),
-      "$PROMPT",
+    const command = buildCliCommand(this.config, {
+      cwd: thread.cwd,
       prompt,
-    );
+      model: payload.model,
+    });
 
     const child = spawn("bash", ["-c", command], {
       cwd: thread.cwd,
@@ -388,6 +399,33 @@ function shellQuote(value: string): string {
 /** Escape a value for the inside of a double-quoted shell word. */
 function doubleQuoteEscape(value: string): string {
   return value.replace(/([\\"$`])/g, "\\$1");
+}
+
+/**
+ * Build the shell command for one turn. `$MODEL_ARG` becomes the configured
+ * model flag — empty when the turn's model is the sentinel "default" and no
+ * `defaultModel` applies — then `$CWD` and `$PROMPT` go in shell-quoted.
+ */
+export function buildCliCommand(
+  config: Pick<CliRuntimeConfig, "command" | "modelFlag" | "defaultModel">,
+  input: { readonly cwd: string; readonly prompt: string; readonly model?: string | null },
+): string {
+  const model =
+    input.model && input.model !== "default" ? input.model : (config.defaultModel ?? null);
+  // The flag is assembled here: every whitespace-separated token that contains
+  // `$MODEL` is built first and then quoted as a whole shell word (so
+  // `omniroute/$MODEL` stays one word), and `$MODEL_ARG` joins in raw.
+  const modelArg =
+    model && config.modelFlag
+      ? config.modelFlag
+          .split(/\s+/)
+          .map((token) =>
+            token.includes("$MODEL") ? shellQuote(token.split("$MODEL").join(model)) : token,
+          )
+          .join(" ")
+      : "";
+  const withModel = config.command.split("$MODEL_ARG").join(modelArg);
+  return substituteCommand(substituteCommand(withModel, "$CWD", input.cwd), "$PROMPT", input.prompt);
 }
 
 /**

@@ -114,6 +114,17 @@ export const OpenSandboxSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "default", clearWhenEmpty: "omit" },
       }),
     ),
+    models: Schema.optionalKey(TrimmedString).pipe(
+      Schema.annotateKey({
+        title: "Model list",
+        description:
+          "Models offered in the model picker, comma-separated: `slug` or `slug=Display name`. The chosen slug reaches the agent as its model flag (usually the model gateway's own slugs).",
+        providerSettingsForm: {
+          placeholder: "auto/best-coding, gpt-5.6-sol=GPT-5.6 Sol",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
     pollIntervalMs: Schema.optionalKey(Schema.Number).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
@@ -131,6 +142,7 @@ export const OpenSandboxSettings = makeProviderSettingsSchema(
       "sandboxScope",
       "agent",
       "model",
+      "models",
     ],
   },
 );

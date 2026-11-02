@@ -137,6 +137,29 @@ const DEFAULT_MODEL: ServerProviderModel = {
 };
 
 /**
+ * The instance's `models` setting: `slug` or `slug=Display name`, separated by
+ * commas or newlines. Slugs are opaque labels — the worker hands the chosen one
+ * to the agent CLI as its model flag, so they are usually the model gateway's
+ * own slugs.
+ */
+export const parseModelList = (raw: string | undefined): ServerProviderModel[] => {
+  if (!raw) return [];
+  const seen = new Set<string>([DEFAULT_MODEL.slug]);
+  const out: ServerProviderModel[] = [];
+  for (const entry of raw.split(/[,\n]/)) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    const slug = (eq >= 0 ? trimmed.slice(0, eq) : trimmed).trim();
+    const name = (eq >= 0 ? trimmed.slice(eq + 1) : trimmed).trim() || slug;
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    out.push({ slug, name, isCustom: false, isDefault: false, capabilities: null });
+  }
+  return out;
+};
+
+/**
  * An instance's health is the control plane's: reachable, the token accepted,
  * and the environment profile this instance names actually there. Saying which
  * of the three failed is the difference between a usable error and
@@ -149,7 +172,7 @@ const probeInstance = (config: OpenSandboxSettings): Effect.Effect<ServerProvide
       enabled: config.enabled,
       installed: true,
       version: null,
-      models: [DEFAULT_MODEL],
+      models: [DEFAULT_MODEL, ...parseModelList(config.models)],
       slashCommands: [],
       skills: [],
       checkedAt,
