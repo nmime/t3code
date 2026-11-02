@@ -32,6 +32,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 
 import { capabilitiesFromWorker, workerCapabilitiesForAgent } from "./capabilities.ts";
+import { resolveModelSelection } from "./modelSelection.ts";
 import { normalizeControlPlaneUrl, type OpenSandboxProviderConfig } from "./config.ts";
 import {
   OpenSandboxControlPlane,
@@ -176,7 +177,7 @@ export const makeAdapter = (
       ...(config.branch ? { branch: config.branch } : {}),
       ...(config.projectId ? { projectId: config.projectId } : {}),
       provider: agent,
-      model: modelSelection.model,
+      model: resolveModelSelection(modelSelection.model, config.model),
       ...(config.sandboxScope ? { scope: config.sandboxScope } : {}),
       threadId,
     });
@@ -379,7 +380,7 @@ export const makeAdapter = (
           providerInstanceId: options.instanceId,
           status: "ready",
           cwd,
-          model: input.modelSelection.model,
+          model: resolveModelSelection(input.modelSelection.model, config.model),
           capabilities,
           // T3 stores this payload as a `provider-session.attached` event, and
           // its schema wants a `DateTime.Utc`, not a JavaScript `Date`.

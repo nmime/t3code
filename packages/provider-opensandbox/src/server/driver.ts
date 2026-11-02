@@ -160,6 +160,29 @@ export const parseModelList = (raw: string | undefined): ServerProviderModel[] =
 };
 
 /**
+ * What the composer offers: the `default` sentinel plus the instance's model
+ * list, with the instance's own default model marked — and added to the list if
+ * the list does not name it.
+ */
+export const instanceModels = (
+  config: Pick<OpenSandboxSettings, "models" | "model">,
+): ServerProviderModel[] => {
+  const chosen = config.model?.trim();
+  const listed = parseModelList(config.models);
+  if (!chosen) return [{ ...DEFAULT_MODEL, isDefault: true }, ...listed];
+  const marked = listed.map((model) =>
+    model.slug === chosen ? { ...model, isDefault: true } : model,
+  );
+  const present = marked.some((model) => model.slug === chosen);
+  return [
+    { ...DEFAULT_MODEL, isDefault: false },
+    ...(present
+      ? marked
+      : [{ slug: chosen, name: chosen, isCustom: false, isDefault: true, capabilities: null }, ...marked]),
+  ];
+};
+
+/**
  * An instance's health is the control plane's: reachable, the token accepted,
  * and the environment profile this instance names actually there. Saying which
  * of the three failed is the difference between a usable error and
@@ -172,7 +195,7 @@ const probeInstance = (config: OpenSandboxSettings): Effect.Effect<ServerProvide
       enabled: config.enabled,
       installed: true,
       version: null,
-      models: [DEFAULT_MODEL, ...parseModelList(config.models)],
+      models: instanceModels(config),
       slashCommands: [],
       skills: [],
       checkedAt,
