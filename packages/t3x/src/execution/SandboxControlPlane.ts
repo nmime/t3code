@@ -25,6 +25,7 @@
 import { spawn } from "node:child_process";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
+import { TERMINAL_TASK_STATES } from "../contracts/execution.js";
 import type {
   SandboxControlPlane as SandboxControlPlanePort,
   ReconcileReport,
@@ -148,6 +149,15 @@ export interface SandboxControlPlaneDeps {
   globalDefaultScope?: SandboxScope;
 }
 
+/** A thread is held by its live task only; a terminal task does not hold it. */
+export const threadHasLiveTask = (
+  tasks: ReadonlyArray<Pick<TaskRecord, "threadId" | "state">>,
+  threadId: string,
+): boolean =>
+  tasks.some(
+    (task) => task.threadId === threadId && !TERMINAL_TASK_STATES.includes(task.state),
+  );
+
 export class SandboxControlPlane implements SandboxControlPlanePort {
   private readonly store: EventStore;
   private readonly backend: SandboxBackend;
@@ -263,10 +273,7 @@ export class SandboxControlPlane implements SandboxControlPlanePort {
 
     const taskId = newTaskId();
     const threadId = input.threadId ?? newThreadId();
-    if (
-      input.threadId !== undefined &&
-      this.store.listTasks().some((candidate) => candidate.threadId === input.threadId)
-    ) {
+    if (input.threadId !== undefined && threadHasLiveTask(this.store.listTasks(), input.threadId)) {
       throw new ExecutionError(
         "idempotency_conflict",
         `A task already exists for thread ${input.threadId}`,

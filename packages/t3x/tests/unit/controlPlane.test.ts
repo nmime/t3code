@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { EventStore } from "../../src/execution/EventStore.js";
 import { TaskStateMachine } from "../../src/execution/TaskStateMachine.js";
+import { threadHasLiveTask } from "../../src/execution/SandboxControlPlane.js";
 import { SecretsBroker } from "../../src/execution/SecretsBroker.js";
 import { PolicyEngine } from "../../src/execution/PolicyEngine.js";
 import { ConfigBundleStore } from "../../src/config-importer/ConfigBundle.js";
@@ -275,4 +276,15 @@ test("config importer strips credentials and flags macOS leftovers", () => {
   const resolved = store.resolveSources([{ profile: "mac-config-v1" }]);
   assert.equal(resolved.files.length, result.bundle.files.length);
   assert.ok(resolved.warnings.length >= 1);
+});
+
+test("a thread's terminal task does not block a new task for the same thread", () => {
+  const at = (state: TaskRecord["state"]) => [{ threadId: "thread_1", state }];
+
+  assert.equal(threadHasLiveTask(at("ready"), "thread_1"), true);
+  assert.equal(threadHasLiveTask(at("running"), "thread_1"), true);
+  assert.equal(threadHasLiveTask(at("suspended"), "thread_1"), true);
+  assert.equal(threadHasLiveTask(at("completed"), "thread_1"), false);
+  assert.equal(threadHasLiveTask(at("failed"), "thread_1"), false);
+  assert.equal(threadHasLiveTask(at("ready"), "thread_2"), false);
 });
