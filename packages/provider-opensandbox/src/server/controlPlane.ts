@@ -359,6 +359,10 @@ export class OpenSandboxControlPlane {
     await this.request<{ ok: boolean }>("POST", `/tasks/${encodeURIComponent(taskId)}/resume`, {});
   }
 
+  async restore(taskId: string): Promise<void> {
+    await this.request<{ ok: boolean }>("POST", `/tasks/${encodeURIComponent(taskId)}/restore`, {});
+  }
+
   async destroy(taskId: string): Promise<void> {
     await this.request<{ ok: boolean }>("POST", `/tasks/${encodeURIComponent(taskId)}/destroy`, {});
   }

@@ -264,6 +264,10 @@ export class HttpApi {
           this.deps.tasks.resume(taskId);
           return send(res, 202, { ok: true });
         }
+        if (rest === "/restore" && method === "POST") {
+          this.deps.tasks.restore(taskId);
+          return send(res, 202, { ok: true });
+        }
         if (rest === "/destroy" && method === "POST") {
           this.deps.tasks.destroy(taskId);
           return send(res, 202, { ok: true });

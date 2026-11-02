@@ -467,6 +467,33 @@ export class TaskService {
     });
   }
 
+  /**
+   * Bring a terminal task back, with a fresh sandbox and the same thread.
+   *
+   * Replacing the task instead would restart its turn ordinals, and T3 keys a
+   * provider turn by (provider thread, ordinal) - so a thread whose task was
+   * destroyed could never run again: the projection refused the second ordinal
+   * 1 with a unique violation.
+   */
+  restore(taskId: string): void {
+    this.getTask(taskId);
+    this.store.submitCommand({
+      commandId: newCommandId(),
+      taskId,
+      kind: "task.restore",
+      payload: {},
+      events: [{ type: "task.restore_requested", payload: { taskId } }],
+      effects: [
+        {
+          effectId: newEffectId(),
+          kind: "task.restore",
+          payload: { taskId },
+          leaseEpoch: this.getTask(taskId).leaseEpoch,
+        },
+      ],
+    });
+  }
+
   destroy(taskId: string): void {
     this.getTask(taskId);
     this.store.submitCommand({

@@ -2,7 +2,7 @@
  * Unit: what a thread does with the task it already has on the control plane.
  *
  * A terminal task refuses messages, so reusing one wedges the thread with
- * `task_state_invalid: task does not accept messages`; those are replaced.
+ * `task_state_invalid: task does not accept messages`; those are restored.
  * A suspended task is resumed, tasks still coming up are waited for, and a live
  * task is reused as it is. An unknown state is reused rather than silently
  * replaced, so a state added later cannot throw away a live sandbox.
@@ -13,9 +13,9 @@ import { test } from "node:test";
 
 import { existingTaskDisposition } from "./adapter.ts";
 
-test("terminal tasks are replaced, never reused", () => {
-  assert.equal(existingTaskDisposition("completed"), "replace");
-  assert.equal(existingTaskDisposition("failed"), "replace");
+test("terminal tasks are restored, never reused", () => {
+  assert.equal(existingTaskDisposition("completed"), "restore");
+  assert.equal(existingTaskDisposition("failed"), "restore");
 });
 
 test("suspended is resumed, coming-up states are waited for", () => {

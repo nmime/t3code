@@ -58,14 +58,14 @@ const defectOf = (cause: unknown): Error =>
       : new Error(String(cause));
 
 /** What to do with the task a thread already has on the control plane. */
-export type ExistingTaskDisposition = "resume" | "wait" | "reuse" | "replace";
+export type ExistingTaskDisposition = "resume" | "wait" | "restore" | "reuse";
 
-/** Terminal tasks refuse messages and are replaced; suspended ones are resumed. */
+/** Terminal tasks refuse messages and are restored; suspended ones are resumed. */
 export const existingTaskDisposition = (state: string): ExistingTaskDisposition => {
   switch (state) {
     case "completed":
     case "failed":
-      return "replace";
+      return "restore";
     case "suspended":
       return "resume";
     case "pending":
@@ -161,8 +161,14 @@ export const makeAdapter = (
         await waitForReady(client, existing.taskId, config.readyTimeoutMs ?? 300_000);
         return await client.task(existing.taskId);
       }
+      if (disposition === "restore") {
+        // A terminal task comes back with a fresh sandbox: same task, same
+        // thread, so T3's provider turns keep their ordinals.
+        await client.restore(existing.taskId);
+        await waitForReady(client, existing.taskId, config.readyTimeoutMs ?? 300_000);
+        return await client.task(existing.taskId);
+      }
       if (disposition === "reuse") return existing;
-      // `replace`: a terminal task refuses messages; create a fresh one.
     }
     const task = await client.createTask({
       profileId: config.profileId,
