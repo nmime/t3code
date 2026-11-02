@@ -57,6 +57,26 @@ const defectOf = (cause: unknown): Error =>
       ? cause
       : new Error(String(cause));
 
+/** What to do with the task a thread already has on the control plane. */
+export type ExistingTaskDisposition = "resume" | "wait" | "reuse" | "replace";
+
+/** Terminal tasks refuse messages and are replaced; suspended ones are resumed. */
+export const existingTaskDisposition = (state: string): ExistingTaskDisposition => {
+  switch (state) {
+    case "completed":
+    case "failed":
+      return "replace";
+    case "suspended":
+      return "resume";
+    case "pending":
+    case "provisioning":
+    case "restoring":
+      return "wait";
+    default:
+      return "reuse";
+  }
+};
+
 export interface OpenSandboxAdapterOptions {
   instanceId: ProviderInstanceId;
   config: OpenSandboxProviderConfig;
@@ -122,7 +142,8 @@ export const makeAdapter = (
   ): Promise<OpenSandboxTask> => {
     const existing = await client.findTaskByThread(threadId);
     if (existing) {
-      if (existing.state === "suspended") {
+      const disposition = existingTaskDisposition(existing.state);
+      if (disposition === "resume") {
         // A suspended task refuses messages, and the resume is an *effect* on
         // the control plane: it answers before the worker is attached again.
         // Dispatching the turn without waiting is what made the first message
@@ -134,13 +155,14 @@ export const makeAdapter = (
         await waitForReady(client, existing.taskId, config.readyTimeoutMs ?? 300_000);
         return await client.task(existing.taskId);
       }
-      if (existing.state === "pending" || existing.state === "provisioning") {
+      if (disposition === "wait") {
         // Provisioned but not up yet: wait rather than hand the turn to a state
         // machine that would refuse it.
         await waitForReady(client, existing.taskId, config.readyTimeoutMs ?? 300_000);
         return await client.task(existing.taskId);
       }
-      return existing;
+      if (disposition === "reuse") return existing;
+      // `replace`: a terminal task refuses messages; create a fresh one.
     }
     const task = await client.createTask({
       profileId: config.profileId,
